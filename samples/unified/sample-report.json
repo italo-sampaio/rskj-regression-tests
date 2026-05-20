@@ -1,0 +1,251 @@
+{
+  "schemaVersion": "1.0.0",
+  "metadata": {
+    "runId": "sample-run-0001",
+    "startedAt": "2026-05-20T12:00:00Z",
+    "endedAt": "2026-05-20T12:18:30Z",
+    "rskjVersion": "vetiver-9.0.1-gaslimit-RC1",
+    "network": "regtest",
+    "rpcUrl": "http://localhost:4444",
+    "labels": {
+      "source": "scripts/build-samples.ts"
+    }
+  },
+  "overall": {
+    "total": 10,
+    "passed": 7,
+    "failed": 2,
+    "skipped": 1,
+    "errored": 0,
+    "durationMs": 513618,
+    "passed_overall": false
+  },
+  "suites": [
+    {
+      "name": "hardhat-smoke",
+      "kind": "hardhat",
+      "verdict": {
+        "total": 6,
+        "passed": 4,
+        "failed": 1,
+        "skipped": 1,
+        "errored": 0,
+        "durationMs": 123456,
+        "passed_overall": false
+      },
+      "tests": [
+        {
+          "name": "should return matching chain ID from opcode and network provider",
+          "status": "passed",
+          "durationMs": 47326,
+          "classname": "Chain ID Verification",
+          "file": "/repo/test/core/ChainIDTest.ts"
+        },
+        {
+          "name": "should deploy contract at deterministic address matching CREATE2 calculation",
+          "status": "passed",
+          "durationMs": 50691,
+          "classname": "EIP-1014 CREATE2 Opcode",
+          "file": "/repo/test/eips/eip1014/Create2Test.ts"
+        },
+        {
+          "name": "should execute SHL (Shift Left) operation with correct result",
+          "status": "passed",
+          "durationMs": 277,
+          "classname": "EIP-145 Bitwise Shift Operations Basic Shift Operations",
+          "file": "/repo/test/eips/eip145/TestShift.ts"
+        },
+        {
+          "name": "should hash 'abc' correctly (EIP-152 test vector)",
+          "status": "passed",
+          "durationMs": 566,
+          "classname": "EIP-152 Blake2b Precompile",
+          "file": "/repo/test/eips/eip152/Blake2bTest.ts"
+        },
+        {
+          "name": "should reject peg-in with malformed locking script",
+          "status": "failed",
+          "durationMs": 12345,
+          "classname": "Bridge Contract Functions",
+          "file": "/repo/test/token-bridge/BridgeTest.ts",
+          "failure": {
+            "message": "expected '0x' to equal '0x01'",
+            "type": "AssertionError",
+            "stack": "AssertionError: expected '0x' to equal '0x01'\n    at Context.<anonymous> (/repo/test/token-bridge/BridgeTest.ts:142:8)\n    at processTicksAndRejections (node:internal/process/task_queues:95:5)"
+          }
+        },
+        {
+          "name": "executes PUSH0 in a constant-folded context",
+          "status": "skipped",
+          "durationMs": 0,
+          "classname": "RSKIP-398 PUSH0 opcode",
+          "file": "/repo/test/rskips/rskip398/Push0Test.ts"
+        }
+      ],
+      "startedAt": "Fri, 19 Sep 2025 09:41:41 GMT",
+      "extras": {
+        "network": "rsk_regtest",
+        "rpcUrl": "http://localhost:4444"
+      }
+    },
+    {
+      "name": "k6:eth_blockNumber",
+      "kind": "k6",
+      "verdict": {
+        "total": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "errored": 0,
+        "durationMs": 30162,
+        "passed_overall": true
+      },
+      "tests": [
+        {
+          "name": "eth_blockNumber (no thresholds)",
+          "status": "passed",
+          "durationMs": 30162
+        }
+      ],
+      "extras": {
+        "iterations": 60,
+        "vus_max": 1,
+        "k6_version": "unknown",
+        "metrics": {
+          "http": {
+            "duration": {
+              "min": 0.14,
+              "max": 0.8,
+              "avg": 0.38,
+              "med": 0.35,
+              "p95": 0.6
+            },
+            "failed_rate": 0,
+            "total_requests": 180,
+            "requests_per_second": 5.97
+          },
+          "checks": {
+            "total": 3120,
+            "passed": 3120,
+            "failed": 0,
+            "success_rate": 1
+          },
+          "custom": {
+            "eth_blockNumber_response_time": {
+              "min": 0,
+              "max": 1,
+              "avg": 0.53,
+              "med": 1,
+              "p95": 1
+            },
+            "rpc_total_requests": {
+              "count": 180
+            },
+            "rpc_req_duration_ms": {
+              "min": 0.14,
+              "max": 0.8,
+              "avg": 0.38,
+              "med": 0.35,
+              "p95": 0.6
+            },
+            "rpc_req_failed_rate": {
+              "rate": 0
+            },
+            "eth_blockNumber_batch_response_time": {
+              "min": 0,
+              "max": 1,
+              "avg": 0.68,
+              "med": 1,
+              "p95": 1
+            }
+          }
+        }
+      },
+      "description": "Smoke check for eth_blockNumber RPC throughput",
+      "startedAt": "2026-04-08T19:24:51.540Z"
+    },
+    {
+      "name": "k6:storage_stress",
+      "kind": "k6",
+      "verdict": {
+        "total": 3,
+        "passed": 2,
+        "failed": 1,
+        "skipped": 0,
+        "errored": 0,
+        "durationMs": 360000,
+        "passed_overall": false
+      },
+      "tests": [
+        {
+          "name": "http_req_duration: p(95)<500",
+          "classname": "http_req_duration",
+          "status": "passed",
+          "durationMs": 0
+        },
+        {
+          "name": "http_req_failed: rate<0.01",
+          "classname": "http_req_failed",
+          "status": "passed",
+          "durationMs": 0
+        },
+        {
+          "name": "stress_call_response_time: p(99)<200",
+          "classname": "stress_call_response_time",
+          "status": "failed",
+          "durationMs": 0,
+          "failure": {
+            "message": "k6 threshold violated on stress_call_response_time: p(99)<200",
+            "type": "ThresholdViolation"
+          }
+        }
+      ],
+      "extras": {
+        "iterations": 4322,
+        "vus_max": 20,
+        "k6_version": "0.49.0",
+        "metrics": {
+          "http": {
+            "duration": {
+              "min": 0.14,
+              "max": 353,
+              "avg": 178.04,
+              "med": 177,
+              "p95": 185
+            },
+            "failed_rate": 0,
+            "total_requests": 12250,
+            "requests_per_second": 34.03
+          },
+          "checks": {
+            "total": 12250,
+            "passed": 12250,
+            "failed": 0,
+            "success_rate": 1
+          },
+          "custom": {
+            "block_gas_used": {
+              "min": 0,
+              "max": 7876893,
+              "avg": 5606310.35,
+              "med": 7876893,
+              "p95": 7876893
+            },
+            "block_gas_limit": {
+              "value": 11000000
+            },
+            "tx_inclusion_time_ms": {
+              "min": 4363,
+              "max": 60877,
+              "avg": 52252.97,
+              "med": 54323,
+              "p95": 56551.85
+            }
+          }
+        }
+      },
+      "description": "Storage-stress scenario with latency thresholds",
+      "startedAt": "2026-05-05T15:51:36.812Z"
+    }
+  ]
+}

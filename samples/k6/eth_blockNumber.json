@@ -1,0 +1,61 @@
+{
+  "meta": {
+    "module": "eth",
+    "method": "eth_blockNumber",
+    "timestamp": "2026-04-08T19:24:51.540Z",
+    "duration_ms": 30162.016464,
+    "vus_max": 1,
+    "iterations": 60
+  },
+  "thresholds": {},
+  "metrics": {
+    "http": {
+      "duration": {
+        "min": 0.14,
+        "max": 0.8,
+        "avg": 0.38,
+        "med": 0.35,
+        "p95": 0.6
+      },
+      "failed_rate": 0,
+      "total_requests": 180,
+      "requests_per_second": 5.97
+    },
+    "checks": {
+      "total": 3120,
+      "passed": 3120,
+      "failed": 0,
+      "success_rate": 1
+    },
+    "custom": {
+      "eth_blockNumber_response_time": {
+        "min": 0,
+        "max": 1,
+        "avg": 0.53,
+        "med": 1,
+        "p95": 1
+      },
+      "rpc_total_requests": {
+        "count": 180
+      },
+      "rpc_req_duration_ms": {
+        "min": 0.14,
+        "max": 0.8,
+        "avg": 0.38,
+        "med": 0.35,
+        "p95": 0.6
+      },
+      "rpc_req_failed_rate": {
+        "rate": 0
+      },
+      "eth_blockNumber_batch_response_time": {
+        "min": 0,
+        "max": 1,
+        "avg": 0.68,
+        "med": 1,
+        "p95": 1
+      }
+    }
+  },
+  "passed": true
+}
