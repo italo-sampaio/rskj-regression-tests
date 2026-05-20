@@ -31,6 +31,16 @@
  * uncaught hook errors via the `failures` count in stats, not via test
  * state — but we keep the path so an unusual reporter version doesn't
  * silently drop test cases.
+ *
+ * Empty-run sentinel: mocha registers `describe()` blocks at module-load
+ * time, so a `result.json` whose `stats.suites > 0` but whose `tests`
+ * array is empty means the test phase never ran (typically because a
+ * global `before` hook in the sibling repo's `setup.ts` threw). Without
+ * special-casing this, the suite would roll up as `total: 0,
+ * passed_overall: true` and the driver would emit a green verdict for
+ * a run that did nothing. The adapter detects the pattern and emits one
+ * synthetic `error`-status test so the failure is visible in the
+ * unified report.
  */
 
 import {
@@ -102,6 +112,38 @@ export function adaptHardhatResultJson(
 
   if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.tests)) {
     throw new Error("hardhat result.json adapter: expected an object with a 'tests' array.");
+  }
+
+  const declaredSuites = parsed.stats?.suites ?? 0;
+  if (parsed.tests.length === 0 && declaredSuites > 0) {
+    // See JSDoc above — guard against the "setup threw, mocha aborted the
+    // test phase" silent-pass shape.
+    const durationMs = parsed.stats?.duration ?? 0;
+    const errorTest: UnifiedTestCase = {
+      name: `hardhat declared ${declaredSuites} suites but executed 0 tests — global setup likely failed`,
+      status: "error",
+      durationMs: 0,
+      failure: {
+        message:
+          `Hardhat reported ${declaredSuites} suite(s) in stats but executed 0 tests. ` +
+          `A global before-hook (e.g. setup.ts) likely threw; check stderr for the underlying error.`,
+        type: "EmptyHardhatRun",
+      },
+    };
+    const suite: UnifiedSuite = {
+      name: options.suiteName ?? "hardhat-smoke",
+      kind: options.kind ?? "hardhat",
+      verdict: computeSuiteVerdict([errorTest], durationMs),
+      tests: [errorTest],
+    };
+    if (options.description) suite.description = options.description;
+    if (parsed.stats?.start) suite.startedAt = parsed.stats.start;
+    const extras: Record<string, unknown> = {
+      ...(parsed.networkInfo ? { networkInfo: parsed.networkInfo } : {}),
+      ...(options.extras ?? {}),
+    };
+    if (Object.keys(extras).length > 0) suite.extras = extras;
+    return suite;
   }
 
   const tests: UnifiedTestCase[] = parsed.tests.map((t) => {
