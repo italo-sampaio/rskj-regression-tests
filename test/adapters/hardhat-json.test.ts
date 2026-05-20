@@ -90,9 +90,26 @@ describe("adapter: adaptHardhatResultJson", () => {
     expect(() => adaptHardhatResultJson({ stats: {} } as unknown as object)).to.throw(/tests/);
   });
 
-  it("accepts an empty tests array as a zero-counts (passing) suite", () => {
-    const suite = adaptHardhatResultJson({ stats: { duration: 0 }, tests: [] });
+  it("accepts a truly empty run (no declared suites) as a zero-counts passing suite", () => {
+    const suite = adaptHardhatResultJson({ stats: { suites: 0, duration: 0 }, tests: [] });
     expect(suite.verdict.total).to.equal(0);
     expect(suite.verdict.passed_overall).to.equal(true);
+  });
+
+  it("flags a run where suites were declared but no tests executed as errored", () => {
+    // Shape produced when rskj-hardhat-tests' setup.ts throws in a global
+    // before-hook: 162 describe() blocks register at module-load, then the
+    // test phase aborts before any it() runs. Without this guard the driver
+    // would report a green verdict for a run that did nothing — see commit
+    // message for the betanet repro.
+    const suite = adaptHardhatResultJson({
+      stats: { suites: 162, tests: 0, passes: 0, failures: 0, pending: 0, duration: 625 },
+      tests: [],
+    });
+    expect(suite.verdict.total).to.equal(1);
+    expect(suite.verdict.errored).to.equal(1);
+    expect(suite.verdict.passed_overall).to.equal(false);
+    expect(suite.tests[0]!.failure?.type).to.equal("EmptyHardhatRun");
+    expect(suite.tests[0]!.failure?.message).to.match(/162 suite/);
   });
 });
