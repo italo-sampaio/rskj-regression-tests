@@ -7,12 +7,13 @@ slice of the three existing RSK test suites against it in a single command,
 producing one unified report — human-readable for reviewers, machine-readable
 for CI gating.
 
-> Status: **report format + adapters.** This repo currently contains the
-> unified regression-report schema (TypeScript types + JSON), JUnit XML and
-> Markdown emitters, and the hardhat and k6 suite-output adapters, alongside
-> the build / lint / format / type-check / test infrastructure. The orchestrator
-> library and driver are tracked as follow-up tasks; see [Roadmap](#roadmap)
-> below.
+> Status: **driver POC + report format + adapters.** This repo currently
+> contains the driver CLI that runs the hardhat-smoke and k6 cherry-pick
+> suites against a pre-running RPC endpoint and emits one unified report,
+> on top of the unified regression-report schema (TypeScript types +
+> JSON), JUnit XML and Markdown emitters, and the hardhat and k6
+> suite-output adapters. The orchestrator library that spins the node up
+> for you is tracked as a follow-up task; see [Roadmap](#roadmap) below.
 
 ## Why
 
@@ -38,7 +39,11 @@ nontrivial change.
 ├── src/
 │   ├── report/         # Unified report schema + JUnit / Markdown emitters
 │   ├── adapters/       # Per-suite adapters: hardhat / k6 → unified shape
+│   ├── driver/         # CLI / config / preset / suite-runners (the POC driver)
+│   ├── cli.ts          # `rskj-regression` CLI entry
 │   └── index.ts        # Public re-exports
+├── bin/
+│   └── rskj-regression.js  # Binary stub invoked via `npx rskj-regression`
 ├── test/               # Unit tests for the harness itself
 ├── samples/            # Real-shape sample inputs + golden unified outputs
 ├── scripts/            # Utilities (e.g. samples:build)
@@ -72,9 +77,30 @@ npm test
 ```
 
 The test suite covers the unified-report schema, the JUnit and Markdown
-emitters, the hardhat and k6 adapters, and a drift check against the
-checked-in golden samples; a green run confirms the toolchain and the
-adapters are wired up correctly.
+emitters, the hardhat and k6 adapters, the driver's CLI / config / preset
+plumbing and the suite runners' fake-process paths, and a drift check
+against the checked-in golden samples; a green run confirms the toolchain
+and the adapters are wired up correctly.
+
+## Driving a regression run
+
+Once `npm run build` has produced `dist/`, the driver CLI is available as
+`bin/rskj-regression.js` (also resolvable as `npx rskj-regression`):
+
+```bash
+rskj-regression run smoke \
+  --rpc-url http://localhost:4444 \
+  --network rsk_regtest
+```
+
+This runs the `smoke` preset — currently the rskj-hardhat-tests
+`[smoke]`-tagged subset plus the `eth_blockNumber` k6 per-method test —
+against the configured RPC endpoint and writes a three-format unified
+report bundle (`report.json` / `report.xml` / `report.md`) under
+`./reports/<run-id>/`. The process exits 0 when the overall verdict
+passes and 1 when it does not. See [`docs/driver-poc.md`](docs/driver-poc.md)
+for the full CLI surface, sibling-repo path resolution, and the run-all
+vs. fail-fast failure policy.
 
 ## Common commands
 
