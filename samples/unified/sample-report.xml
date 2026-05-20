@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="10" failures="2" errors="0" skipped="1" time="513.618" name="sample-run-0001">
+  <testsuite name="hardhat-smoke" tests="6" failures="1" errors="0" skipped="1" time="123.456" timestamp="Fri, 19 Sep 2025 09:41:41 GMT">
+    <testcase name="should return matching chain ID from opcode and network provider" time="47.326" classname="Chain ID Verification" file="/repo/test/core/ChainIDTest.ts"/>
+    <testcase name="should deploy contract at deterministic address matching CREATE2 calculation" time="50.691" classname="EIP-1014 CREATE2 Opcode" file="/repo/test/eips/eip1014/Create2Test.ts"/>
+    <testcase name="should execute SHL (Shift Left) operation with correct result" time="0.277" classname="EIP-145 Bitwise Shift Operations Basic Shift Operations" file="/repo/test/eips/eip145/TestShift.ts"/>
+    <testcase name="should hash &apos;abc&apos; correctly (EIP-152 test vector)" time="0.566" classname="EIP-152 Blake2b Precompile" file="/repo/test/eips/eip152/Blake2bTest.ts"/>
+    <testcase name="should reject peg-in with malformed locking script" time="12.345" classname="Bridge Contract Functions" file="/repo/test/token-bridge/BridgeTest.ts">
+      <failure message="expected &apos;0x&apos; to equal &apos;0x01&apos;" type="AssertionError">AssertionError: expected &apos;0x&apos; to equal &apos;0x01&apos;
+    at Context.&lt;anonymous&gt; (/repo/test/token-bridge/BridgeTest.ts:142:8)
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)</failure>
+    </testcase>
+    <testcase name="executes PUSH0 in a constant-folded context" time="0.000" classname="RSKIP-398 PUSH0 opcode" file="/repo/test/rskips/rskip398/Push0Test.ts">
+      <skipped/>
+    </testcase>
+  </testsuite>
+  <testsuite name="k6:eth_blockNumber" tests="1" failures="0" errors="0" skipped="0" time="30.162" timestamp="2026-04-08T19:24:51.540Z">
+    <testcase name="eth_blockNumber (no thresholds)" time="30.162"/>
+  </testsuite>
+  <testsuite name="k6:storage_stress" tests="3" failures="1" errors="0" skipped="0" time="360.000" timestamp="2026-05-05T15:51:36.812Z">
+    <testcase name="http_req_duration: p(95)&lt;500" time="0.000" classname="http_req_duration"/>
+    <testcase name="http_req_failed: rate&lt;0.01" time="0.000" classname="http_req_failed"/>
+    <testcase name="stress_call_response_time: p(99)&lt;200" time="0.000" classname="stress_call_response_time">
+      <failure message="k6 threshold violated on stress_call_response_time: p(99)&lt;200" type="ThresholdViolation"></failure>
+    </testcase>
+  </testsuite>
+</testsuites>
