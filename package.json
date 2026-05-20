@@ -1,0 +1,46 @@
+{
+  "name": "rskj-regression",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Unified regression-testing harness that drives the rskj-hardhat-tests, rskj-k6-tests, and rootstock-integration-tests suites against a representative topology.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist coverage .nyc_output",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "type-check": "tsc --noEmit",
+    "test": "mocha",
+    "verify": "npm run format:check && npm run lint && npm run type-check && npm test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rsksmart/rskj-regression.git"
+  },
+  "author": "RSK Core team",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/rsksmart/rskj-regression/issues"
+  },
+  "homepage": "https://github.com/rsksmart/rskj-regression#readme",
+  "devDependencies": {
+    "@types/chai": "^4.3.20",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.10.5",
+    "@typescript-eslint/eslint-plugin": "^8.20.0",
+    "@typescript-eslint/parser": "^8.20.0",
+    "chai": "^4.5.0",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^10.0.1",
+    "mocha": "^10.8.2",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0"
+  }
+}
