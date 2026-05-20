@@ -5,6 +5,12 @@ coverage/
 package-lock.json
 *.tgz
 
+# Captured suite outputs — kept byte-for-byte identical to the source repos
+# (rskj-k6-tests, rskj-hardhat-tests, RIT) so we can diff against the original
+# when those repos update. Do NOT let Prettier touch these.
+samples/k6/
+samples/hardhat/
+
 # Generated golden outputs — formatted by their emitters, not by Prettier.
 # Regenerate with `npm run samples:build` after changing schema or adapters.
 samples/unified/
