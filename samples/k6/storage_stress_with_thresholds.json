@@ -1,0 +1,65 @@
+{
+  "meta": {
+    "module": "scenarios",
+    "method": "storage_stress",
+    "timestamp": "2026-05-05T15:51:36.812Z",
+    "duration_ms": 360000,
+    "vus_max": 20,
+    "iterations": 4322,
+    "k6_version": "0.49.0"
+  },
+  "thresholds": {
+    "http_req_duration": {
+      "passed": true,
+      "thresholds": ["p(95)<500"]
+    },
+    "http_req_failed": {
+      "passed": true,
+      "thresholds": ["rate<0.01"]
+    },
+    "stress_call_response_time": {
+      "passed": false,
+      "thresholds": ["p(99)<200"]
+    }
+  },
+  "metrics": {
+    "http": {
+      "duration": {
+        "min": 0.14,
+        "max": 353,
+        "avg": 178.04,
+        "med": 177,
+        "p95": 185
+      },
+      "failed_rate": 0.0,
+      "total_requests": 12250,
+      "requests_per_second": 34.03
+    },
+    "checks": {
+      "total": 12250,
+      "passed": 12250,
+      "failed": 0,
+      "success_rate": 1
+    },
+    "custom": {
+      "block_gas_used": {
+        "min": 0,
+        "max": 7876893,
+        "avg": 5606310.35,
+        "med": 7876893,
+        "p95": 7876893
+      },
+      "block_gas_limit": {
+        "value": 11000000
+      },
+      "tx_inclusion_time_ms": {
+        "min": 4363,
+        "max": 60877,
+        "avg": 52252.97,
+        "med": 54323,
+        "p95": 56551.85
+      }
+    }
+  },
+  "passed": false
+}

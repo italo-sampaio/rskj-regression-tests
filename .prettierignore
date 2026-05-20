@@ -4,3 +4,7 @@ coverage/
 .nyc_output/
 package-lock.json
 *.tgz
+
+# Generated golden outputs — formatted by their emitters, not by Prettier.
+# Regenerate with `npm run samples:build` after changing schema or adapters.
+samples/unified/
