@@ -1,0 +1,14 @@
+<testsuite name="Mocha Tests" tests="6" failures="1" errors="0" skipped="1" timestamp="Fri, 19 Sep 2025 09:41:41 GMT" time="123.456">
+<testcase classname="Chain ID Verification" name="should return matching chain ID from opcode and network provider" file="/repo/test/core/ChainIDTest.ts" time="47.326"/>
+<testcase classname="EIP-1014 CREATE2 Opcode" name="should deploy contract at deterministic address matching CREATE2 calculation" file="/repo/test/eips/eip1014/Create2Test.ts" time="50.691"/>
+<testcase classname="EIP-145 Bitwise Shift Operations Basic Shift Operations" name="should execute SHL (Shift Left) operation with correct result" file="/repo/test/eips/eip145/TestShift.ts" time="0.277"/>
+<testcase classname="EIP-152 Blake2b Precompile" name="should hash &#x27;abc&#x27; correctly (EIP-152 test vector)" file="/repo/test/eips/eip152/Blake2bTest.ts" time="0.566"/>
+<testcase classname="Bridge Contract Functions" name="should reject peg-in with malformed locking script" file="/repo/test/token-bridge/BridgeTest.ts" time="12.345">
+<failure message="expected '0x' to equal '0x01'" type="AssertionError">AssertionError: expected '0x' to equal '0x01'
+    at Context.&lt;anonymous&gt; (/repo/test/token-bridge/BridgeTest.ts:142:8)
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)</failure>
+</testcase>
+<testcase classname="RSKIP-398 PUSH0 opcode" name="executes PUSH0 in a constant-folded context" file="/repo/test/rskips/rskip398/Push0Test.ts" time="0">
+<skipped/>
+</testcase>
+</testsuite>

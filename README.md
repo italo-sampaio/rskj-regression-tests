@@ -7,10 +7,12 @@ slice of the three existing RSK test suites against it in a single command,
 producing one unified report — human-readable for reviewers, machine-readable
 for CI gating.
 
-> Status: **scaffolding only.** This repo currently contains the build, lint,
-> format, type-check, and unit-test infrastructure plus a placeholder test
-> suite. The orchestrator library, driver, and unified reporter are tracked
-> as follow-up tasks; see [Roadmap](#roadmap) below.
+> Status: **report format + adapters.** This repo currently contains the
+> unified regression-report schema (TypeScript types + JSON), JUnit XML and
+> Markdown emitters, and the hardhat and k6 suite-output adapters, alongside
+> the build / lint / format / type-check / test infrastructure. The orchestrator
+> library and driver are tracked as follow-up tasks; see [Roadmap](#roadmap)
+> below.
 
 ## Why
 
@@ -33,8 +35,14 @@ nontrivial change.
 
 ```
 .
-├── src/                # Driver + orchestrator code (placeholder)
+├── src/
+│   ├── report/         # Unified report schema + JUnit / Markdown emitters
+│   ├── adapters/       # Per-suite adapters: hardhat / k6 → unified shape
+│   └── index.ts        # Public re-exports
 ├── test/               # Unit tests for the harness itself
+├── samples/            # Real-shape sample inputs + golden unified outputs
+├── scripts/            # Utilities (e.g. samples:build)
+├── docs/               # Format specs + reference docs
 ├── .github/workflows/  # CI: lint, format, type-check, unit tests
 ├── eslint.config.js    # Flat-config ESLint setup
 ├── tsconfig.json
@@ -44,6 +52,10 @@ nontrivial change.
 
 The three driven suites live in their own repos and are **not** vendored
 here — the driver invokes them as external commands or library calls.
+
+The unified regression-report format (the contract every adapter
+produces and every emitter consumes) is documented in
+[`docs/unified-report-format.md`](docs/unified-report-format.md).
 
 ## Requirements
 
@@ -59,21 +71,24 @@ npm install
 npm test
 ```
 
-The placeholder test suite should print a green run; this confirms the
-TypeScript + Mocha + Chai toolchain is wired up correctly.
+The test suite covers the unified-report schema, the JUnit and Markdown
+emitters, the hardhat and k6 adapters, and a drift check against the
+checked-in golden samples; a green run confirms the toolchain and the
+adapters are wired up correctly.
 
 ## Common commands
 
-| Command                | What it does                                                    |
-| ---------------------- | --------------------------------------------------------------- |
-| `npm test`             | Run the Mocha unit-test suite                                   |
-| `npm run lint`         | ESLint over the entire repo                                     |
-| `npm run lint:fix`     | ESLint with autofix                                             |
-| `npm run format`       | Apply Prettier formatting                                       |
-| `npm run format:check` | Prettier check (CI-friendly)                                    |
-| `npm run type-check`   | `tsc --noEmit` against `tsconfig.json`                          |
-| `npm run build`        | Emit JS + declaration files into `dist/`                        |
-| `npm run verify`       | Format check + lint + type-check + tests (mirrors what CI runs) |
+| Command                 | What it does                                                                |
+| ----------------------- | --------------------------------------------------------------------------- |
+| `npm test`              | Run the Mocha unit-test suite                                               |
+| `npm run lint`          | ESLint over the entire repo                                                 |
+| `npm run lint:fix`      | ESLint with autofix                                                         |
+| `npm run format`        | Apply Prettier formatting                                                   |
+| `npm run format:check`  | Prettier check (CI-friendly)                                                |
+| `npm run type-check`    | `tsc --noEmit` against `tsconfig.json`                                      |
+| `npm run build`         | Emit JS + declaration files into `dist/`                                    |
+| `npm run samples:build` | Regenerate `samples/unified/` golden outputs from the checked-in raw inputs |
+| `npm run verify`        | Format check + lint + type-check + tests (mirrors what CI runs)             |
 
 ## Tooling decisions
 
