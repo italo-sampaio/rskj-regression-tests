@@ -7,13 +7,17 @@ slice of the three existing RSK test suites against it in a single command,
 producing one unified report — human-readable for reviewers, machine-readable
 for CI gating.
 
-> Status: **driver POC + report format + adapters.** This repo currently
-> contains the driver CLI that runs the hardhat-smoke and k6 cherry-pick
-> suites against a pre-running RPC endpoint and emits one unified report,
-> on top of the unified regression-report schema (TypeScript types +
-> JSON), JUnit XML and Markdown emitters, and the hardhat and k6
-> suite-output adapters. The orchestrator library that spins the node up
-> for you is tracked as a follow-up task; see [Roadmap](#roadmap) below.
+> Status: **driver POC + single-node orchestrator + report format + adapters.**
+> This repo currently contains the driver CLI that runs the hardhat-smoke
+> and k6 cherry-pick suites against either a pre-running RPC endpoint
+> (`--rpc-url`) or a node it spins up itself from a rskj fat JAR
+> (`--auto-node --rskj-jar <path>`), and emits one unified report.
+> Underneath sits the unified regression-report schema as TypeScript
+> types and JSON, JUnit XML and Markdown emitters, the hardhat and k6
+> suite-output adapters, and a small `@rsksmart/network-orchestrator`-shaped
+> library at `src/orchestrator/` that spins up an isolated rskj regtest
+> node and tears it down cleanly. Full topology (bitcoind + federators)
+> is a follow-up task; see [Roadmap](#roadmap) below.
 
 ## Why
 
@@ -40,6 +44,8 @@ nontrivial change.
 │   ├── report/         # Unified report schema + JUnit / Markdown emitters
 │   ├── adapters/       # Per-suite adapters: hardhat / k6 → unified shape
 │   ├── driver/         # CLI / config / preset / suite-runners (the POC driver)
+│   ├── orchestrator/   # Single-rskj-node spawner (port-utils, HOCON config,
+│   │                   # JVM runner, RPC-readiness probe)
 │   ├── cli.ts          # `rskj-regression` CLI entry
 │   └── index.ts        # Public re-exports
 ├── bin/
@@ -85,7 +91,9 @@ and the adapters are wired up correctly.
 ## Driving a regression run
 
 Once `npm run build` has produced `dist/`, the driver CLI is available as
-`bin/rskj-regression.js` (also resolvable as `npx rskj-regression`):
+`bin/rskj-regression.js` (also resolvable as `npx rskj-regression`).
+
+**Against a pre-running node:**
 
 ```bash
 rskj-regression run smoke \
@@ -93,14 +101,45 @@ rskj-regression run smoke \
   --network rsk_regtest
 ```
 
-This runs the `smoke` preset — currently the rskj-hardhat-tests
-`[smoke]`-tagged subset plus the `eth_blockNumber` k6 per-method test —
-against the configured RPC endpoint and writes a three-format unified
-report bundle (`report.json` / `report.xml` / `report.md`) under
-`./reports/<run-id>/`. The process exits 0 when the overall verdict
-passes and 1 when it does not. See [`docs/driver-poc.md`](docs/driver-poc.md)
-for the full CLI surface, sibling-repo path resolution, and the run-all
-vs. fail-fast failure policy.
+**Spinning up its own node (single-node orchestrator):**
+
+```bash
+rskj-regression run smoke \
+  --auto-node \
+  --rskj-jar /abs/path/to/rskj-core-X.Y.Z-all.jar
+```
+
+In both cases the `smoke` preset runs the rskj-hardhat-tests
+`[smoke]`-tagged subset plus the `eth_blockNumber` k6 per-method test,
+and writes a three-format unified report bundle
+(`report.json` / `report.xml` / `report.md`) under `./reports/<run-id>/`.
+The process exits 0 when the overall verdict passes and 1 when it does
+not. See [`docs/driver-poc.md`](docs/driver-poc.md) for the full CLI
+surface, sibling-repo path resolution, and the run-all vs. fail-fast
+failure policy, and [`docs/orchestrator-single-node.md`](docs/orchestrator-single-node.md)
+for the `--auto-node` path and the underlying library API.
+
+## Using the orchestrator as a library
+
+The `src/orchestrator/` subtree is re-exported from the package root so
+other tools (or the suites themselves, during local iteration) can
+consume it directly:
+
+```ts
+import { startRskjNode } from "rskj-regression";
+
+const node = await startRskjNode({
+  jarPath: "/abs/path/to/rskj-all.jar",
+  // ports + dataDir are auto-allocated when omitted
+});
+await node.ready();
+console.log(`hit me at ${node.rpcUrl}`);
+// ...
+await node.stop(); // idempotent
+```
+
+See [`docs/orchestrator-single-node.md`](docs/orchestrator-single-node.md)
+for the full API surface and config defaults.
 
 ## Common commands
 

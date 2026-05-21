@@ -179,6 +179,76 @@ describe("driver/config: resolveConfig", () => {
     ).to.throw(/--rpc-url/);
   });
 
+  it("accepts --auto-node + --rskj-jar instead of --rpc-url", () => {
+    const parsed = parseArgs([
+      "run",
+      "smoke",
+      "--auto-node",
+      "--rskj-jar",
+      "/abs/path/to/rskj.jar",
+    ]);
+    const config = resolveConfig(parsed, {
+      repoRoot: REPO,
+      env: {},
+      cwd: "/work",
+      pathExists: allowAll,
+    });
+    expect(config.autoNode).to.equal(true);
+    expect(config.rskjJarPath).to.equal("/abs/path/to/rskj.jar");
+    expect(config.rpcUrl).to.equal(""); // filled in by the runner after auto-node boot
+  });
+
+  it("rejects --auto-node together with --rpc-url", () => {
+    const parsed = parseArgs([
+      "run",
+      "smoke",
+      "--auto-node",
+      "--rskj-jar",
+      "/abs/path.jar",
+      "--rpc-url",
+      "http://x",
+    ]);
+    expect(() =>
+      resolveConfig(parsed, { repoRoot: REPO, env: {}, cwd: "/work", pathExists: allowAll }),
+    ).to.throw(/mutually exclusive/);
+  });
+
+  it("rejects --auto-node without --rskj-jar", () => {
+    const parsed = parseArgs(["run", "smoke", "--auto-node"]);
+    expect(() =>
+      resolveConfig(parsed, { repoRoot: REPO, env: {}, cwd: "/work", pathExists: allowAll }),
+    ).to.throw(/requires --rskj-jar/);
+  });
+
+  it("rejects --auto-node when the jar path does not exist", () => {
+    const parsed = parseArgs(["run", "smoke", "--auto-node", "--rskj-jar", "/abs/missing.jar"]);
+    expect(() =>
+      resolveConfig(parsed, {
+        repoRoot: REPO,
+        env: {},
+        cwd: "/work",
+        pathExists: (p: string) => !p.endsWith("missing.jar"),
+      }),
+    ).to.throw(/--rskj-jar path does not exist/);
+  });
+
+  it("resolves relative --rskj-jar against cwd", () => {
+    const parsed = parseArgs([
+      "run",
+      "smoke",
+      "--auto-node",
+      "--rskj-jar",
+      "build/libs/rskj-all.jar",
+    ]);
+    const config = resolveConfig(parsed, {
+      repoRoot: REPO,
+      env: {},
+      cwd: "/my/work",
+      pathExists: allowAll,
+    });
+    expect(config.rskjJarPath).to.equal("/my/work/build/libs/rskj-all.jar");
+  });
+
   it("throws when the resolved hardhat-tests path does not exist", () => {
     const parsed = parseArgs(["run", "smoke", "--rpc-url", "http://x"]);
     expect(() =>
@@ -209,6 +279,8 @@ describe("driver/config: usage", () => {
   it("describes the supported flags", () => {
     const text = usage();
     expect(text).to.include("--rpc-url");
+    expect(text).to.include("--auto-node");
+    expect(text).to.include("--rskj-jar");
     expect(text).to.include("--fail-fast");
     expect(text).to.include("--hardhat-tests-path");
     expect(text).to.include("--k6-tests-path");
