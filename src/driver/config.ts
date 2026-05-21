@@ -4,10 +4,19 @@
  * The CLI surface is intentionally tiny for the POC:
  *
  *     rskj-regression run <preset> --rpc-url <url> [flags]
+ *     rskj-regression run <preset> --auto-node --rskj-jar <path> [flags]
  *
  * Flag inventory:
  *
- *   `--rpc-url <url>`           Required. RPC endpoint the suites target.
+ *   `--rpc-url <url>`           Required when `--auto-node` is *not* set.
+ *                               RPC endpoint the suites target.
+ *   `--auto-node`               When set, the driver spins up its own rskj
+ *                               regtest node via the orchestrator library
+ *                               and uses its RPC URL. Mutually exclusive
+ *                               with `--rpc-url`.
+ *   `--rskj-jar <path>`         Required with `--auto-node`. Absolute path
+ *                               to a rskj fat JAR. (Build-from-SHA / pin
+ *                               resolution lands in task #7.)
  *   `--output-dir <dir>`        Where to write the unified report bundle.
  *                               Defaults to `./reports/<run-id>/`. The run
  *                               id is auto-generated from the timestamp
@@ -31,10 +40,10 @@
  *
  * Path resolution is explicit so the failure mode is clear: when neither
  * the flag, the env var, nor the peer-directory exists, the driver fails
- * fast with a message telling the user which knob to set. We picked the
- * env-var-or-peer-directory model over auto-cloning to keep the POC's
- * footprint small — orchestration that owns its dependencies lands in
- * task #4.
+ * fast with a message telling the user which knob to set. The
+ * env-var-or-peer-directory model is the cheapest way to keep cross-repo
+ * iteration friction low; auto-cloning / fetching is out of scope until
+ * the build-sourcing-modes task.
  */
 
 import { existsSync, statSync } from "node:fs";
@@ -44,8 +53,19 @@ import { dirname, isAbsolute, resolve } from "node:path";
 export interface DriverConfig {
   /** Preset name, e.g. `"smoke"`. */
   preset: string;
-  /** RPC endpoint every suite hits. Required. */
+  /**
+   * RPC endpoint every suite hits. When `autoNode` is set this is empty
+   * at resolve-time and the driver fills it in after spinning the
+   * orchestrator up.
+   */
   rpcUrl: string;
+  /**
+   * When true, the driver owns the lifecycle of an rskj node via the
+   * orchestrator library and ignores any pre-running endpoint.
+   */
+  autoNode: boolean;
+  /** Absolute path to a rskj fat JAR when `autoNode` is set. */
+  rskjJarPath?: string;
   /** Hardhat network identifier passed via `HARDHAT_NETWORK`. */
   hardhatNetwork: string;
   /** Resolved absolute path to a checkout of `rskj-hardhat-tests`. */
@@ -70,6 +90,8 @@ export interface ParsedArgs {
   command: "run" | "help";
   preset?: string;
   rpcUrl?: string;
+  autoNode: boolean;
+  rskjJarPath?: string;
   hardhatNetwork?: string;
   hardhatTestsPath?: string;
   k6TestsPath?: string;
@@ -79,13 +101,21 @@ export interface ParsedArgs {
   failFast: boolean;
 }
 
-const USAGE = `Usage: rskj-regression run <preset> --rpc-url <url> [options]
+const USAGE = `Usage:
+  rskj-regression run <preset> --rpc-url <url> [options]
+  rskj-regression run <preset> --auto-node --rskj-jar <path> [options]
 
 Sub-commands:
-  run <preset>                Run a regression preset against a pre-running node.
+  run <preset>                Run a regression preset.
+
+RPC source (pick exactly one):
+  --rpc-url <url>             Use a pre-running node at this URL.
+  --auto-node                 Spin up an rskj regtest node via the
+                              orchestrator and target its RPC.
 
 Options:
-  --rpc-url <url>             Required. RPC endpoint the suites target.
+  --rskj-jar <path>           Required with --auto-node. Absolute path
+                              to a rskj fat JAR (e.g. rskj-core-X.Y.Z-all.jar).
   --network <name>            Hardhat network identifier (default rsk_regtest).
   --hardhat-tests-path <p>    Path to a rskj-hardhat-tests checkout.
                               Falls back to env HARDHAT_TESTS_PATH, then
@@ -123,7 +153,7 @@ class ArgvError extends Error {}
  */
 export function parseArgs(argv: string[]): ParsedArgs {
   if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
-    return { command: "help", failFast: false };
+    return { command: "help", failFast: false, autoNode: false };
   }
 
   const command = argv[0];
@@ -131,7 +161,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     throw new ArgvError(`Unknown sub-command "${command}". Expected "run".`);
   }
 
-  const result: ParsedArgs = { command: "run", failFast: false };
+  const result: ParsedArgs = { command: "run", failFast: false, autoNode: false };
   let i = 1;
   // The first positional after `run` is the preset.
   if (i < argv.length && !argv[i]!.startsWith("-")) {
@@ -144,6 +174,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
     switch (arg) {
       case "--rpc-url":
         result.rpcUrl = expectValue(argv, ++i, arg);
+        break;
+      case "--auto-node":
+        result.autoNode = true;
+        break;
+      case "--rskj-jar":
+        result.rskjJarPath = expectValue(argv, ++i, arg);
         break;
       case "--network":
         result.hardhatNetwork = expectValue(argv, ++i, arg);
@@ -168,7 +204,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "-h":
       case "--help":
-        return { command: "help", failFast: false };
+        return { command: "help", failFast: false, autoNode: false };
       default:
         throw new ArgvError(`Unknown option "${arg}".`);
     }
@@ -195,6 +231,10 @@ export function defaultRunId(now: Date = new Date()): string {
   // Short pseudo-random suffix so two runs in the same second don't collide.
   const suffix = Math.random().toString(36).slice(2, 6);
   return `${date}-${time}-${suffix}`;
+}
+
+function resolveJarPath(jarPath: string, cwd: string): string {
+  return isAbsolute(jarPath) ? jarPath : resolve(cwd, jarPath);
 }
 
 /** Pure path-resolution input shape — exposed so {@link resolveConfig} can be unit-tested. */
@@ -235,8 +275,24 @@ export function resolveConfig(parsed: ParsedArgs, options: ResolveOptions): Driv
   if (!parsed.preset) {
     throw new Error("Missing required positional argument: <preset>.");
   }
-  if (!parsed.rpcUrl) {
-    throw new Error("Missing required option: --rpc-url <url>.");
+  if (parsed.autoNode && parsed.rpcUrl) {
+    throw new Error("--auto-node and --rpc-url are mutually exclusive.");
+  }
+  if (!parsed.autoNode && !parsed.rpcUrl) {
+    throw new Error("Missing required option: either --rpc-url <url> or --auto-node.");
+  }
+  if (parsed.autoNode && !parsed.rskjJarPath) {
+    throw new Error("--auto-node requires --rskj-jar <path>.");
+  }
+  const rskjJarPath = parsed.rskjJarPath ? resolveJarPath(parsed.rskjJarPath, cwd) : undefined;
+  if (parsed.autoNode && rskjJarPath) {
+    // Validate up-front so the error mentions the flag, not "java: no such file".
+    if (!pathExists(rskjJarPath)) {
+      throw new Error(
+        `--rskj-jar path does not exist: ${rskjJarPath}. ` +
+          `Build a fat JAR with \`./gradlew fatJar\` in the rskj source tree, or point at a prebuilt one.`,
+      );
+    }
   }
 
   const repoParent = dirname(options.repoRoot);
@@ -265,7 +321,12 @@ export function resolveConfig(parsed: ParsedArgs, options: ResolveOptions): Driv
 
   const result: DriverConfig = {
     preset: parsed.preset,
-    rpcUrl: parsed.rpcUrl,
+    // `rpcUrl` is filled in by the runner after the auto-node boot. Keep
+    // it as the empty string here rather than `undefined` so the field
+    // stays string-typed throughout — the runner overwrites it before
+    // any suite reads it.
+    rpcUrl: parsed.rpcUrl ?? "",
+    autoNode: parsed.autoNode,
     hardhatNetwork: parsed.hardhatNetwork ?? "rsk_regtest",
     hardhatTestsPath,
     k6TestsPath,
@@ -273,6 +334,9 @@ export function resolveConfig(parsed: ParsedArgs, options: ResolveOptions): Driv
     runId,
     failFast: parsed.failFast,
   };
+  if (rskjJarPath) {
+    result.rskjJarPath = rskjJarPath;
+  }
   if (parsed.rskjVersion) {
     result.rskjVersion = parsed.rskjVersion;
   }
