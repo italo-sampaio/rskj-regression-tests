@@ -31,6 +31,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { adaptHardhatJUnit } from "../adapters/junit-xml.js";
 import { adaptK6Summary } from "../adapters/k6.js";
+import { startRskjNode } from "../orchestrator/start-rskj-node.js";
+import type { RskjNodeHandle } from "../orchestrator/topology.js";
 import {
   buildUnifiedReport,
   type ReportMetadata,
@@ -74,6 +76,12 @@ export interface RunnerOverrides {
   writeFileFn?: (p: string, contents: string) => void;
   /** Optional logger for high-level progress. Defaults to console.log. */
   log?: (line: string) => void;
+  /**
+   * Override the orchestrator entry point — used by `--auto-node` tests
+   * to inject a stub handle without spawning a JVM. Production callers
+   * omit this.
+   */
+  startNodeFn?: typeof startRskjNode;
 }
 
 /**
@@ -92,71 +100,116 @@ export async function runDriver(
   const writeFileFn = overrides.writeFileFn ?? ((p: string, c: string) => writeFileSync(p, c));
   const hardhatRunner = overrides.hardhat ?? runHardhat;
   const k6Runner = overrides.k6 ?? runK6;
+  const startNodeFn = overrides.startNodeFn ?? startRskjNode;
 
   const preset = getPreset(config.preset);
   const startedAt = new Date().toISOString();
 
-  log(`[driver] run-id=${config.runId} preset=${preset.name} rpc-url=${config.rpcUrl}`);
-  log(`[driver] output-dir=${config.outputDir}`);
-  log(`[driver] failure policy: ${config.failFast ? "fail-fast" : "run-all"}`);
+  // When --auto-node is set, spin the orchestrator up before any suite
+  // runs. The resulting `rpcUrl` is patched onto the (otherwise immutable)
+  // config so suites and the report metadata see the same value.
+  let nodeHandle: RskjNodeHandle | null = null;
+  let effectiveConfig = config;
+  if (config.autoNode) {
+    if (!config.rskjJarPath) {
+      throw new Error(
+        "internal: autoNode set without rskjJarPath; resolveConfig should have caught this",
+      );
+    }
+    log(`[driver] --auto-node set; spinning up rskj regtest node from ${config.rskjJarPath}`);
+    nodeHandle = await startNodeFn({
+      jarPath: config.rskjJarPath,
+      log: (line: string) => log(`[rskj] ${line}`),
+    });
+    log(`[driver] node pid=${nodeHandle.pid} rpc=${nodeHandle.rpcUrl} p2p=${nodeHandle.p2pPort}`);
+    log(`[driver] waiting for RPC readiness...`);
+    await nodeHandle.ready();
+    log(`[driver] node ready at ${nodeHandle.rpcUrl}`);
+    effectiveConfig = { ...config, rpcUrl: nodeHandle.rpcUrl };
+  }
+
+  log(
+    `[driver] run-id=${effectiveConfig.runId} preset=${preset.name} rpc-url=${effectiveConfig.rpcUrl}`,
+  );
+  log(`[driver] output-dir=${effectiveConfig.outputDir}`);
+  log(`[driver] failure policy: ${effectiveConfig.failFast ? "fail-fast" : "run-all"}`);
   log(`[driver] suites to run: ${preset.runs.map((r) => r.name).join(", ")}`);
 
-  mkdirFn(config.outputDir);
+  mkdirFn(effectiveConfig.outputDir);
 
   const suites: UnifiedSuite[] = [];
   let stoppedEarly = false;
+  let report: UnifiedReport;
+  let jsonPath = "";
+  let xmlPath = "";
+  let mdPath = "";
 
-  for (const run of preset.runs) {
-    log(`[driver] → ${run.kind} :: ${run.name}`);
-    const suite = await runOne(run, config, { hardhatRunner, k6Runner, log });
-    suites.push(suite);
+  try {
+    for (const run of preset.runs) {
+      log(`[driver] → ${run.kind} :: ${run.name}`);
+      const suite = await runOne(run, effectiveConfig, { hardhatRunner, k6Runner, log });
+      suites.push(suite);
+      log(
+        `[driver] ← ${run.name}: ${suite.verdict.passed_overall ? "PASSED" : "FAILED"} ` +
+          `(${suite.verdict.passed}/${suite.verdict.total} passed, ` +
+          `${suite.verdict.failed} failed, ${suite.verdict.errored} errored)`,
+      );
+      if (effectiveConfig.failFast && !suite.verdict.passed_overall) {
+        log("[driver] --fail-fast set and suite did not pass; skipping remaining suites.");
+        stoppedEarly = true;
+        break;
+      }
+    }
+
+    const endedAt = new Date().toISOString();
+    const metadata: ReportMetadata = {
+      runId: effectiveConfig.runId,
+      startedAt,
+      endedAt,
+      network: effectiveConfig.hardhatNetwork,
+      rpcUrl: effectiveConfig.rpcUrl,
+      labels: {
+        preset: preset.name,
+        failurePolicy: effectiveConfig.failFast ? "fail-fast" : "run-all",
+        ...(stoppedEarly ? { stoppedEarly: "true" } : {}),
+        ...(effectiveConfig.autoNode ? { autoNode: "true" } : {}),
+      },
+    };
+    if (effectiveConfig.rskjVersion) {
+      metadata.rskjVersion = effectiveConfig.rskjVersion;
+    }
+    report = buildUnifiedReport(metadata, suites);
+
+    jsonPath = resolve(effectiveConfig.outputDir, "report.json");
+    xmlPath = resolve(effectiveConfig.outputDir, "report.xml");
+    mdPath = resolve(effectiveConfig.outputDir, "report.md");
+    writeFileFn(jsonPath, JSON.stringify(report, null, 2) + "\n");
+    writeFileFn(xmlPath, renderJUnitXml(report));
+    writeFileFn(mdPath, renderMarkdown(report));
+
+    log(`[driver] wrote ${jsonPath}`);
+    log(`[driver] wrote ${xmlPath}`);
+    log(`[driver] wrote ${mdPath}`);
     log(
-      `[driver] ← ${run.name}: ${suite.verdict.passed_overall ? "PASSED" : "FAILED"} ` +
-        `(${suite.verdict.passed}/${suite.verdict.total} passed, ` +
-        `${suite.verdict.failed} failed, ${suite.verdict.errored} errored)`,
+      `[driver] overall: ${report.overall.passed_overall ? "PASSED" : "FAILED"} ` +
+        `(${report.overall.passed}/${report.overall.total} passed across ${suites.length} suites)`,
     );
-    if (config.failFast && !suite.verdict.passed_overall) {
-      log("[driver] --fail-fast set and suite did not pass; skipping remaining suites.");
-      stoppedEarly = true;
-      break;
+  } finally {
+    // Guarantee the JVM is torn down even when a suite (or the report
+    // emit step) throws. Stop is idempotent so a clean run hitting this
+    // a second time on a re-throw is fine.
+    if (nodeHandle) {
+      log("[driver] stopping auto-node");
+      try {
+        await nodeHandle.stop();
+      } catch (err) {
+        log(`[driver] auto-node stop failed: ${(err as Error).message}`);
+      }
     }
   }
 
-  const endedAt = new Date().toISOString();
-  const metadata: ReportMetadata = {
-    runId: config.runId,
-    startedAt,
-    endedAt,
-    network: config.hardhatNetwork,
-    rpcUrl: config.rpcUrl,
-    labels: {
-      preset: preset.name,
-      failurePolicy: config.failFast ? "fail-fast" : "run-all",
-      ...(stoppedEarly ? { stoppedEarly: "true" } : {}),
-    },
-  };
-  if (config.rskjVersion) {
-    metadata.rskjVersion = config.rskjVersion;
-  }
-  const report = buildUnifiedReport(metadata, suites);
-
-  const jsonPath = resolve(config.outputDir, "report.json");
-  const xmlPath = resolve(config.outputDir, "report.xml");
-  const mdPath = resolve(config.outputDir, "report.md");
-  writeFileFn(jsonPath, JSON.stringify(report, null, 2) + "\n");
-  writeFileFn(xmlPath, renderJUnitXml(report));
-  writeFileFn(mdPath, renderMarkdown(report));
-
-  log(`[driver] wrote ${jsonPath}`);
-  log(`[driver] wrote ${xmlPath}`);
-  log(`[driver] wrote ${mdPath}`);
-  log(
-    `[driver] overall: ${report.overall.passed_overall ? "PASSED" : "FAILED"} ` +
-      `(${report.overall.passed}/${report.overall.total} passed across ${suites.length} suites)`,
-  );
-
   return {
-    report,
+    report: report!,
     artifacts: { json: jsonPath, xml: xmlPath, markdown: mdPath },
   };
 }
