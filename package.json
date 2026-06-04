@@ -1,12 +1,24 @@
 {
   "name": "rskj-regression",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "Unified regression-testing harness that drives the rskj-hardhat-tests, rskj-k6-tests, and rootstock-integration-tests suites against a representative topology.",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
+  "bin": {
+    "rskj-regression": "bin/rskj-regression.js"
+  },
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "files": [
+    "bin",
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist coverage .nyc_output",
