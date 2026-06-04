@@ -60,3 +60,31 @@ export { runHardhat } from "./driver/runners/hardhat.js";
 export type { HardhatRunnerOptions, HardhatRunnerResult } from "./driver/runners/hardhat.js";
 export { runK6 } from "./driver/runners/k6.js";
 export type { K6RunnerOptions, K6RunnerResult } from "./driver/runners/k6.js";
+
+// Orchestrator — single-rskj-node topology (v1).
+export {
+  DEFAULT_PORT_RANGE,
+  defaultRskjConfig,
+  findFreePorts,
+  isPortAvailable,
+  mergeConfig,
+  renderHocon,
+  spawnRskjNode,
+  startRskjNode,
+  waitForPort,
+  waitForRpcReady,
+} from "./orchestrator/index.js";
+export type {
+  ConfigValue,
+  DefaultConfigInputs,
+  FindFreePortsOptions,
+  FlatConfig,
+  HostPort,
+  RpcReadinessOptions,
+  RskjNodeConfig,
+  RskjNodeHandle,
+  RskjRunnerHooks,
+  StartRskjNodeOptions,
+  TopologyConfig,
+  WaitForPortOptions,
+} from "./orchestrator/index.js";
