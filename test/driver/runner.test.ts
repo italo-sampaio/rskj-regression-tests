@@ -44,6 +44,7 @@ function baseConfig(overrides: Partial<DriverConfig> = {}): DriverConfig {
   return {
     preset: "smoke",
     rpcUrl: "http://node:4444",
+    autoNode: false,
     hardhatNetwork: "rsk_regtest",
     hardhatTestsPath: "/fake/hardhat",
     k6TestsPath: "/fake/k6",
@@ -202,6 +203,119 @@ describe("driver/runner: runDriver", () => {
     );
     expect(result.report.metadata.network).to.equal("rsk_betanet");
     expect(result.report.metadata.rskjVersion).to.equal("vetiver-9.0.1");
+  });
+
+  it("--auto-node spins the orchestrator up, runs suites, and stops it", async () => {
+    const events: string[] = [];
+    const fakeHandle = {
+      rpcUrl: "http://127.0.0.1:55555",
+      rpcPort: 55555,
+      p2pPort: 55556,
+      dataDir: "/tmp/fake-data",
+      pid: 1234,
+      ready: async () => {
+        events.push("ready");
+      },
+      stop: async () => {
+        events.push("stop");
+      },
+    };
+    const fakeStart = async (opts: { jarPath: string }): Promise<typeof fakeHandle> => {
+      events.push(`start:${opts.jarPath}`);
+      return fakeHandle;
+    };
+    const fakeHardhat = async (
+      run: HardhatRun,
+      opts: HardhatRunnerOptions,
+    ): Promise<HardhatRunnerResult> => {
+      events.push(`hardhat:${opts.rpcUrl}`);
+      return {
+        suite: suiteFromOutcome(run.name, "hardhat", true),
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+      };
+    };
+    const fakeK6 = async (run: K6Run, opts: K6RunnerOptions): Promise<K6RunnerResult> => {
+      events.push(`k6:${opts.rpcUrl}`);
+      return {
+        suite: suiteFromOutcome(run.name, "k6", true),
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+      };
+    };
+    const { overrides } = makeWriters();
+
+    const result = await runDriver(
+      baseConfig({ autoNode: true, rskjJarPath: "/abs/rskj.jar", rpcUrl: "" }),
+      {
+        hardhat: fakeHardhat,
+        k6: fakeK6,
+        // Cast is needed because the fake handle has a fixed-number pid;
+        // the real handle's pid is a getter that returns number | null.
+        startNodeFn: fakeStart as unknown as Parameters<typeof runDriver>[1] extends infer R
+          ? R extends { startNodeFn?: infer F }
+            ? NonNullable<F>
+            : never
+          : never,
+        ...overrides,
+      },
+    );
+
+    expect(events).to.deep.equal([
+      "start:/abs/rskj.jar",
+      "ready",
+      "hardhat:http://127.0.0.1:55555",
+      "k6:http://127.0.0.1:55555",
+      "stop",
+    ]);
+    expect(result.report.metadata.rpcUrl).to.equal("http://127.0.0.1:55555");
+    expect(result.report.metadata.labels?.autoNode).to.equal("true");
+  });
+
+  it("--auto-node stops the orchestrator even when a suite throws", async () => {
+    const events: string[] = [];
+    const fakeHandle = {
+      rpcUrl: "http://127.0.0.1:55555",
+      rpcPort: 55555,
+      p2pPort: 55556,
+      dataDir: "/tmp/fake-data",
+      pid: 1234,
+      ready: async () => undefined,
+      stop: async () => {
+        events.push("stop");
+      },
+    };
+    const fakeStart = async (): Promise<typeof fakeHandle> => fakeHandle;
+    const fakeHardhat = async (): Promise<HardhatRunnerResult> => {
+      throw new Error("kaboom");
+    };
+    const fakeK6 = async (run: K6Run): Promise<K6RunnerResult> => ({
+      suite: suiteFromOutcome(run.name, "k6", true),
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    const { overrides } = makeWriters();
+
+    let err: Error | null = null;
+    try {
+      await runDriver(baseConfig({ autoNode: true, rskjJarPath: "/abs/rskj.jar", rpcUrl: "" }), {
+        hardhat: fakeHardhat,
+        k6: fakeK6,
+        startNodeFn: fakeStart as unknown as Parameters<typeof runDriver>[1] extends infer R
+          ? R extends { startNodeFn?: infer F }
+            ? NonNullable<F>
+            : never
+          : never,
+        ...overrides,
+      });
+    } catch (e) {
+      err = e as Error;
+    }
+    expect(err, "runDriver should propagate the suite failure").to.not.equal(null);
+    expect(events).to.deep.equal(["stop"]);
   });
 });
 

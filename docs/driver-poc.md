@@ -1,23 +1,28 @@
 # Driver POC — `rskj-regression run`
 
 The `rskj-regression` binary is a thin coordinator that runs a
-hardhat-smoke slice and a k6 cherry-pick scenario against an already-running
-RPC endpoint, normalizes both suites' native output through the existing
-adapters, and emits one unified-report bundle to disk.
+hardhat-smoke slice and a k6 cherry-pick scenario against either an
+already-running RPC endpoint or a node it spins up itself via the
+[single-node orchestrator](./orchestrator-single-node.md). It
+normalizes both suites' native output through the existing adapters and
+emits one unified-report bundle to disk.
 
-This is the [phase-1 POC](https://www.notion.so/rootstock/Leverage-RIT-for-regression-366c132873f9809a9f44c6ae72988f86)
-from the regression-testing initiative. The driver _does not_ spin a node
-up — orchestration lands in a follow-up task.
+This was the [phase-1 POC](https://www.notion.so/rootstock/Leverage-RIT-for-regression-366c132873f9809a9f44c6ae72988f86)
+from the regression-testing initiative; phase 2 added the `--auto-node`
+path documented below.
 
 ## CLI surface
 
 ```
 rskj-regression run <preset> --rpc-url <url> [options]
+rskj-regression run <preset> --auto-node --rskj-jar <path> [options]
 ```
 
 | Flag                       | Description                                                                                                    |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `--rpc-url <url>`          | Required. RPC endpoint every suite hits.                                                                       |
+| `--rpc-url <url>`          | Use a pre-running node at this URL. Mutually exclusive with `--auto-node`.                                     |
+| `--auto-node`              | Spin up an rskj regtest node via the orchestrator and target its RPC.                                          |
+| `--rskj-jar <path>`        | Required with `--auto-node`. Absolute path to a rskj fat JAR.                                                  |
 | `--network <name>`         | Hardhat network identifier (default `rsk_regtest`). Picks the block in the sibling repo's `hardhat.config.ts`. |
 | `--hardhat-tests-path <p>` | Local clone of `rskj-hardhat-tests`. Falls back to `$HARDHAT_TESTS_PATH`, then the peer-directory convention.  |
 | `--k6-tests-path <p>`      | Local clone of `rskj-k6-tests`. Falls back to `$K6_TESTS_PATH`, then the peer-directory convention.            |
@@ -26,6 +31,29 @@ rskj-regression run <preset> --rpc-url <url> [options]
 | `--rskj-version <v>`       | Label carried into report metadata.                                                                            |
 | `--fail-fast`              | Stop after the first failing suite. Default is **run-all**: every suite runs even when an earlier one failed.  |
 | `-h`, `--help`             | Show usage.                                                                                                    |
+
+## `--auto-node` lifecycle
+
+When `--auto-node` is set, the driver:
+
+1. Validates `--rskj-jar` (must exist; resolved relative to `cwd`).
+2. Calls `startRskjNode({ jarPath })`, which writes a fresh HOCON
+   config under a tmpdir-based data dir, picks free ports in the
+   30000–30200 range, and `spawn`s `java -cp <jar> co.rsk.Start --regtest`.
+3. Awaits `handle.ready()` — blocks on the RPC port binding plus a
+   successful `eth_blockNumber` probe.
+4. Patches `handle.rpcUrl` onto the driver's config so the suites
+   and the report metadata see the same value.
+5. Runs every suite in the preset in order.
+6. In `finally`, calls `handle.stop()` — SIGTERMs the JVM (15 s grace)
+   then SIGKILLs, and removes the data dir.
+
+The pre-existing `--rpc-url` flow is unchanged. The two modes can't
+co-exist on a single invocation — argv parsing rejects it.
+
+Report metadata gains `labels.autoNode = "true"` for auto-node runs so
+downstream consumers can distinguish them from pre-existing-endpoint
+runs.
 
 Exit code:
 
@@ -129,8 +157,10 @@ them without touching disk or forking real children — see
 
 ## Out of scope for this POC
 
-- Orchestrating an rskj node — caller's responsibility for now.
-- Building rskj from source / pinning a JAR — caller's responsibility.
+- ~~Orchestrating an rskj node — caller's responsibility for now.~~
+  Done in phase 2: see [`orchestrator-single-node.md`](./orchestrator-single-node.md).
+- Building rskj from source / pinning a JAR — caller's responsibility
+  for now. Build-sourcing modes land in task #7.
 - Full topology (federators + bitcoind + miner) — phase-4 task.
 - A CI workflow that gates on `-rc` branches — phase-4 task.
 - HTML rendering — Markdown is the only human-readable output.
