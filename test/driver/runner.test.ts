@@ -1,0 +1,248 @@
+/**
+ * Unit tests for the driver orchestrator.
+ *
+ * Uses the {@link RunnerOverrides} seam to inject fake suite runners +
+ * in-memory file writers, so these tests run without a node, hardhat, or
+ * k6 binary anywhere on the host. The real aggregation logic
+ * (`buildUnifiedReport`, the adapters) is covered by its own tests; here
+ * we cover the driver's own behaviour: ordering, fail-fast, artifact
+ * paths, and the verdict-to-exit-code mapping.
+ */
+
+import { expect } from "chai";
+import { resolve } from "node:path";
+import type { DriverConfig } from "../../src/driver/config.js";
+import { exitCodeFor, runDriver } from "../../src/driver/runner.js";
+import type {
+  HardhatRunnerOptions,
+  HardhatRunnerResult,
+} from "../../src/driver/runners/hardhat.js";
+import type { K6RunnerOptions, K6RunnerResult } from "../../src/driver/runners/k6.js";
+import type { HardhatRun, K6Run } from "../../src/driver/presets.js";
+import { computeSuiteVerdict, type UnifiedSuite } from "../../src/report/schema.js";
+
+function suiteFromOutcome(name: string, kind: "hardhat" | "k6", passed: boolean): UnifiedSuite {
+  const tests = passed
+    ? [{ name: `${name}: ok`, status: "passed" as const, durationMs: 10 }]
+    : [
+        {
+          name: `${name}: boom`,
+          status: "failed" as const,
+          durationMs: 10,
+          failure: { message: "boom" },
+        },
+      ];
+  return {
+    name,
+    kind,
+    verdict: computeSuiteVerdict(tests, 10),
+    tests,
+  };
+}
+
+function baseConfig(overrides: Partial<DriverConfig> = {}): DriverConfig {
+  return {
+    preset: "smoke",
+    rpcUrl: "http://node:4444",
+    hardhatNetwork: "rsk_regtest",
+    hardhatTestsPath: "/fake/hardhat",
+    k6TestsPath: "/fake/k6",
+    outputDir: "/tmp/driver-test-out",
+    runId: "test-run",
+    failFast: false,
+    ...overrides,
+  };
+}
+
+interface CapturedArtifacts {
+  files: Record<string, string>;
+  dirs: string[];
+}
+
+function makeWriters(): {
+  overrides: {
+    mkdirFn: (p: string) => void;
+    writeFileFn: (p: string, c: string) => void;
+    log: (line: string) => void;
+  };
+  captured: CapturedArtifacts;
+} {
+  const captured: CapturedArtifacts = { files: {}, dirs: [] };
+  return {
+    overrides: {
+      mkdirFn: (p: string) => captured.dirs.push(p),
+      writeFileFn: (p: string, c: string) => {
+        captured.files[p] = c;
+      },
+      log: () => {
+        /* silent in tests */
+      },
+    },
+    captured,
+  };
+}
+
+describe("driver/runner: runDriver", () => {
+  it("invokes both runners in preset order and writes the three artifacts", async () => {
+    const calls: string[] = [];
+    const fakeHardhat = async (
+      run: HardhatRun,
+      _opts: HardhatRunnerOptions,
+    ): Promise<HardhatRunnerResult> => {
+      calls.push(`hardhat:${run.name}`);
+      return {
+        suite: suiteFromOutcome(run.name, "hardhat", true),
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+      };
+    };
+    const fakeK6 = async (run: K6Run, _opts: K6RunnerOptions): Promise<K6RunnerResult> => {
+      calls.push(`k6:${run.name}`);
+      return { suite: suiteFromOutcome(run.name, "k6", true), exitCode: 0, stdout: "", stderr: "" };
+    };
+    const { overrides, captured } = makeWriters();
+
+    const result = await runDriver(baseConfig(), {
+      hardhat: fakeHardhat,
+      k6: fakeK6,
+      ...overrides,
+    });
+
+    expect(calls).to.deep.equal(["hardhat:hardhat-smoke", "k6:k6:eth_blockNumber"]);
+    expect(captured.dirs).to.deep.equal(["/tmp/driver-test-out"]);
+
+    expect(result.artifacts.json).to.equal(resolve("/tmp/driver-test-out/report.json"));
+    expect(result.artifacts.xml).to.equal(resolve("/tmp/driver-test-out/report.xml"));
+    expect(result.artifacts.markdown).to.equal(resolve("/tmp/driver-test-out/report.md"));
+    expect(Object.keys(captured.files).sort()).to.deep.equal(
+      [result.artifacts.json, result.artifacts.markdown, result.artifacts.xml].sort(),
+    );
+
+    expect(result.report.overall.passed_overall).to.equal(true);
+    expect(result.report.suites).to.have.length(2);
+    expect(result.report.metadata.runId).to.equal("test-run");
+    expect(result.report.metadata.rpcUrl).to.equal("http://node:4444");
+    expect(result.report.metadata.labels?.preset).to.equal("smoke");
+    expect(result.report.metadata.labels?.failurePolicy).to.equal("run-all");
+  });
+
+  it("collects every suite by default even when one fails", async () => {
+    const fakeHardhat = async (run: HardhatRun): Promise<HardhatRunnerResult> => ({
+      suite: suiteFromOutcome(run.name, "hardhat", false),
+      exitCode: 1,
+      stdout: "",
+      stderr: "",
+    });
+    const fakeK6 = async (run: K6Run): Promise<K6RunnerResult> => ({
+      suite: suiteFromOutcome(run.name, "k6", true),
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    const { overrides } = makeWriters();
+
+    const result = await runDriver(baseConfig(), {
+      hardhat: fakeHardhat,
+      k6: fakeK6,
+      ...overrides,
+    });
+    expect(result.report.suites).to.have.length(2);
+    expect(result.report.overall.passed_overall).to.equal(false);
+    expect(result.report.metadata.labels?.stoppedEarly).to.equal(undefined);
+  });
+
+  it("stops at the first failure when --fail-fast is set", async () => {
+    const calls: string[] = [];
+    const fakeHardhat = async (run: HardhatRun): Promise<HardhatRunnerResult> => {
+      calls.push(`hardhat:${run.name}`);
+      return {
+        suite: suiteFromOutcome(run.name, "hardhat", false),
+        exitCode: 1,
+        stdout: "",
+        stderr: "",
+      };
+    };
+    const fakeK6 = async (run: K6Run): Promise<K6RunnerResult> => {
+      calls.push(`k6:${run.name}`);
+      return { suite: suiteFromOutcome(run.name, "k6", true), exitCode: 0, stdout: "", stderr: "" };
+    };
+    const { overrides } = makeWriters();
+
+    const result = await runDriver(baseConfig({ failFast: true }), {
+      hardhat: fakeHardhat,
+      k6: fakeK6,
+      ...overrides,
+    });
+
+    expect(calls).to.deep.equal(["hardhat:hardhat-smoke"]);
+    expect(result.report.suites).to.have.length(1);
+    expect(result.report.overall.passed_overall).to.equal(false);
+    expect(result.report.metadata.labels?.stoppedEarly).to.equal("true");
+  });
+
+  it("uses the configured network in report metadata", async () => {
+    const fakeHardhat = async (run: HardhatRun): Promise<HardhatRunnerResult> => ({
+      suite: suiteFromOutcome(run.name, "hardhat", true),
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    const fakeK6 = async (run: K6Run): Promise<K6RunnerResult> => ({
+      suite: suiteFromOutcome(run.name, "k6", true),
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    const { overrides } = makeWriters();
+
+    const result = await runDriver(
+      baseConfig({ hardhatNetwork: "rsk_betanet", rskjVersion: "vetiver-9.0.1" }),
+      { hardhat: fakeHardhat, k6: fakeK6, ...overrides },
+    );
+    expect(result.report.metadata.network).to.equal("rsk_betanet");
+    expect(result.report.metadata.rskjVersion).to.equal("vetiver-9.0.1");
+  });
+});
+
+describe("driver/runner: exitCodeFor", () => {
+  it("returns 0 when the report passes", () => {
+    const passingReport = {
+      schemaVersion: "1.0.0",
+      metadata: { startedAt: "x" },
+      overall: {
+        total: 0,
+        passed: 0,
+        failed: 0,
+        skipped: 0,
+        errored: 0,
+        durationMs: 0,
+        passed_overall: true,
+      },
+      suites: [],
+    };
+    expect(
+      exitCodeFor({ report: passingReport, artifacts: { json: "", xml: "", markdown: "" } }),
+    ).to.equal(0);
+  });
+
+  it("returns 1 when the report fails", () => {
+    const failingReport = {
+      schemaVersion: "1.0.0",
+      metadata: { startedAt: "x" },
+      overall: {
+        total: 1,
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        errored: 0,
+        durationMs: 1,
+        passed_overall: false,
+      },
+      suites: [],
+    };
+    expect(
+      exitCodeFor({ report: failingReport, artifacts: { json: "", xml: "", markdown: "" } }),
+    ).to.equal(1);
+  });
+});
