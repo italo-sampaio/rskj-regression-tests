@@ -34,5 +34,16 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "off",
     },
   },
+  {
+    // The bin/ stub is a Node.js entry script. ESLint doesn't pick up
+    // Node globals via the project's flat-config "globals: node: true" entry
+    // (which only works with the env-style config), so add them explicitly.
+    files: ["bin/**/*.js"],
+    languageOptions: {
+      globals: {
+        process: "readonly",
+      },
+    },
+  },
   prettierConfig,
 );
