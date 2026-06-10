@@ -31,6 +31,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { adaptHardhatJUnit } from "../adapters/junit-xml.js";
 import { adaptK6Summary } from "../adapters/k6.js";
+import { resolveBinaries } from "../build/resolve-binaries.js";
+import type { ResolvedBinaries } from "../build/types.js";
 import { startRskjNode } from "../orchestrator/start-rskj-node.js";
 import type { RskjNodeHandle } from "../orchestrator/topology.js";
 import {
@@ -82,6 +84,12 @@ export interface RunnerOverrides {
    * omit this.
    */
   startNodeFn?: typeof startRskjNode;
+  /**
+   * Override the build-sourcing resolver — used by tests to inject a
+   * stub {@link ResolvedBinaries} without downloading / building
+   * anything. Production callers omit this.
+   */
+  resolveBinariesFn?: typeof resolveBinaries;
 }
 
 /**
@@ -101,6 +109,7 @@ export async function runDriver(
   const hardhatRunner = overrides.hardhat ?? runHardhat;
   const k6Runner = overrides.k6 ?? runK6;
   const startNodeFn = overrides.startNodeFn ?? startRskjNode;
+  const resolveBinariesFn = overrides.resolveBinariesFn ?? resolveBinaries;
 
   const preset = getPreset(config.preset);
   const startedAt = new Date().toISOString();
@@ -110,15 +119,39 @@ export async function runDriver(
   // config so suites and the report metadata see the same value.
   let nodeHandle: RskjNodeHandle | null = null;
   let effectiveConfig = config;
+  let resolvedBinaries: ResolvedBinaries | null = null;
   if (config.autoNode) {
-    if (!config.rskjJarPath) {
+    // Resolve binaries BEFORE starting the node. Custom mode validates +
+    // fingerprints, release mode downloads + verifies, sha mode
+    // clones + builds (or serves all of these from the cache). Only the
+    // rskj jar is consumed today; powpeg / tcpsigner resolution is
+    // recorded in the report for the upcoming full-topology task.
+    let rskjJarPath = config.rskjJarPath;
+    if (config.buildSpec) {
+      log(`[driver] resolving binaries (build mode: ${config.buildSpec.mode})`);
+      resolvedBinaries = await resolveBinariesFn(config.buildSpec, {
+        log: (line: string) => log(`[build] ${line}`),
+      });
+      for (const warning of resolvedBinaries.warnings) {
+        log(`[driver] WARNING: ${warning}`);
+      }
+      if (!resolvedBinaries.rskjJarPath) {
+        throw new Error(
+          "--auto-node needs an rskj jar but the build spec resolved none " +
+            "(sha mode with only --powpeg-sha?).",
+        );
+      }
+      rskjJarPath = resolvedBinaries.rskjJarPath;
+    }
+    if (!rskjJarPath) {
       throw new Error(
-        "internal: autoNode set without rskjJarPath; resolveConfig should have caught this",
+        "internal: autoNode set without rskjJarPath or buildSpec; " +
+          "resolveConfig should have caught this",
       );
     }
-    log(`[driver] --auto-node set; spinning up rskj regtest node from ${config.rskjJarPath}`);
+    log(`[driver] --auto-node set; spinning up rskj regtest node from ${rskjJarPath}`);
     nodeHandle = await startNodeFn({
-      jarPath: config.rskjJarPath,
+      jarPath: rskjJarPath,
       log: (line: string) => log(`[rskj] ${line}`),
     });
     log(`[driver] node pid=${nodeHandle.pid} rpc=${nodeHandle.rpcUrl} p2p=${nodeHandle.p2pPort}`);
@@ -173,10 +206,16 @@ export async function runDriver(
         failurePolicy: effectiveConfig.failFast ? "fail-fast" : "run-all",
         ...(stoppedEarly ? { stoppedEarly: "true" } : {}),
         ...(effectiveConfig.autoNode ? { autoNode: "true" } : {}),
+        ...(effectiveConfig.buildSpec ? { buildMode: effectiveConfig.buildSpec.mode } : {}),
+        ...(resolvedBinaries ? provenanceLabels(resolvedBinaries) : {}),
       },
     };
     if (effectiveConfig.rskjVersion) {
       metadata.rskjVersion = effectiveConfig.rskjVersion;
+    } else if (resolvedBinaries?.provenance.rskj?.version) {
+      // Release / sha modes know the version they resolved; surface it
+      // when the caller didn't label the run explicitly.
+      metadata.rskjVersion = resolvedBinaries.provenance.rskj.version;
     }
     report = buildUnifiedReport(metadata, suites);
 
@@ -241,6 +280,34 @@ async function runOne(
     log: ctx.log,
   });
   return suite;
+}
+
+/**
+ * Project binary provenance into flat report-metadata labels so a
+ * report alone answers "exactly which binaries did this run use?".
+ * powpeg / tcpsigner aren't consumed by the driver yet — recording
+ * them is the contract until the full-topology task starts launching
+ * them.
+ */
+function provenanceLabels(resolved: ResolvedBinaries): Record<string, string> {
+  const labels: Record<string, string> = {};
+  const { rskj, powpeg, tcpsigner } = resolved.provenance;
+  if (rskj) {
+    labels.rskjSha256 = rskj.sha256;
+    if (rskj.releaseTag) labels.rskjReleaseTag = rskj.releaseTag;
+    if (rskj.commitSha) labels.rskjCommitSha = rskj.commitSha;
+  }
+  if (powpeg) {
+    labels.powpegJarPath = powpeg.path;
+    labels.powpegSha256 = powpeg.sha256;
+    if (powpeg.releaseTag) labels.powpegReleaseTag = powpeg.releaseTag;
+    if (powpeg.commitSha) labels.powpegCommitSha = powpeg.commitSha;
+  }
+  if (tcpsigner) {
+    labels.tcpsignerPath = tcpsigner.path;
+    labels.tcpsignerSha256 = tcpsigner.sha256;
+  }
+  return labels;
 }
 
 /**

@@ -14,9 +14,32 @@
  *                               regtest node via the orchestrator library
  *                               and uses its RPC URL. Mutually exclusive
  *                               with `--rpc-url`.
- *   `--rskj-jar <path>`         Required with `--auto-node`. Absolute path
- *                               to a rskj fat JAR. (Build-from-SHA / pin
- *                               resolution lands in task #7.)
+ *   `--rskj-jar <path>`         Path to a rskj fat JAR. With `--auto-node`
+ *                               and no `--build-mode` this is required and
+ *                               is sugar for `--build-mode custom`.
+ *
+ * Build-sourcing flags (all require `--auto-node`; see
+ * `docs/build-sourcing-modes.md`):
+ *
+ *   `--build-mode <m>`          `release` | `custom` | `sha`. How the rskj /
+ *                               powpeg binaries are obtained. Defaults to
+ *                               `custom` when `--rskj-jar` is given.
+ *   `--release-version <v>`     (release) rskj release pin, e.g. `9.0.1`
+ *                               or `VETIVER-9.0.1`.
+ *   `--powpeg-release-version <v>` (release) optional powpeg-node pin,
+ *                               e.g. `9.0.0.0`.
+ *   `--rskj-sha <ref>`          (sha) git ref of rsksmart/rskj to build.
+ *   `--powpeg-sha <ref>`        (sha) optional git ref of
+ *                               rsksmart/powpeg-node to build.
+ *   `--powpeg-jar <path>`       (custom) prebuilt powpeg fat JAR.
+ *   `--tcpsigner <path>`        (custom) tcpsigner binary.
+ *   `--cache-dir <path>`        Download / build cache root. Default
+ *                               `$RSKJ_REGRESSION_CACHE_DIR`, else
+ *                               `~/.cache/rskj-regression`.
+ *
+ * Backward compatibility is a hard requirement: `--auto-node --rskj-jar
+ * <path>` keeps working unchanged (it synthesizes a custom-mode spec),
+ * and `--rpc-url` runs need no build mode at all.
  *   `--output-dir <dir>`        Where to write the unified report bundle.
  *                               Defaults to `./reports/<run-id>/`. The run
  *                               id is auto-generated from the timestamp
@@ -48,6 +71,7 @@
 
 import { existsSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
+import type { BuildSourceSpec } from "../build/types.js";
 
 /** Parsed-and-resolved driver configuration, ready for `runner.run()`. */
 export interface DriverConfig {
@@ -64,8 +88,20 @@ export interface DriverConfig {
    * orchestrator library and ignores any pre-running endpoint.
    */
   autoNode: boolean;
-  /** Absolute path to a rskj fat JAR when `autoNode` is set. */
+  /**
+   * Absolute path to a rskj fat JAR when `autoNode` is set with a
+   * custom-mode source. Kept alongside {@link buildSpec} for backward
+   * compatibility — library callers that construct a DriverConfig by
+   * hand with only this field still work.
+   */
   rskjJarPath?: string;
+  /**
+   * How `--auto-node` obtains its binaries. Synthesized as a
+   * custom-mode spec when only `--rskj-jar` is given; absent on
+   * `--rpc-url` runs. The runner resolves this via `resolveBinaries`
+   * BEFORE starting the node.
+   */
+  buildSpec?: BuildSourceSpec;
   /** Hardhat network identifier passed via `HARDHAT_NETWORK`. */
   hardhatNetwork: string;
   /** Resolved absolute path to a checkout of `rskj-hardhat-tests`. */
@@ -92,6 +128,14 @@ export interface ParsedArgs {
   rpcUrl?: string;
   autoNode: boolean;
   rskjJarPath?: string;
+  buildMode?: string;
+  releaseVersion?: string;
+  powpegReleaseVersion?: string;
+  rskjSha?: string;
+  powpegSha?: string;
+  powpegJarPath?: string;
+  tcpsignerPath?: string;
+  cacheDir?: string;
   hardhatNetwork?: string;
   hardhatTestsPath?: string;
   k6TestsPath?: string;
@@ -104,6 +148,8 @@ export interface ParsedArgs {
 const USAGE = `Usage:
   rskj-regression run <preset> --rpc-url <url> [options]
   rskj-regression run <preset> --auto-node --rskj-jar <path> [options]
+  rskj-regression run <preset> --auto-node --build-mode release --release-version <v> [options]
+  rskj-regression run <preset> --auto-node --build-mode sha --rskj-sha <ref> [options]
 
 Sub-commands:
   run <preset>                Run a regression preset.
@@ -113,9 +159,28 @@ RPC source (pick exactly one):
   --auto-node                 Spin up an rskj regtest node via the
                               orchestrator and target its RPC.
 
+Build sourcing (all require --auto-node):
+  --build-mode <mode>         How to obtain the rskj / powpeg binaries:
+                              release | custom | sha. Defaults to custom
+                              when --rskj-jar is given.
+  --rskj-jar <path>           (custom) Path to a rskj fat JAR
+                              (e.g. rskj-core-X.Y.Z-all.jar).
+  --powpeg-jar <path>         (custom) Path to a powpeg fat JAR
+                              (federate-node-...-all.jar).
+  --tcpsigner <path>          (custom) Path to a tcpsigner binary.
+  --release-version <v>       (release) rskj release pin, e.g. 9.0.1 or
+                              VETIVER-9.0.1. Verified against the
+                              reproducible-builds repo.
+  --powpeg-release-version <v> (release) Optional powpeg-node release pin,
+                              e.g. 9.0.0.0 or VETIVER-9.0.0.0.
+  --rskj-sha <ref>            (sha) Git ref of rsksmart/rskj to clone+build.
+  --powpeg-sha <ref>          (sha) Optional git ref of rsksmart/powpeg-node
+                              to clone+build.
+  --cache-dir <path>          Download / build cache root. Default
+                              $RSKJ_REGRESSION_CACHE_DIR, else
+                              ~/.cache/rskj-regression.
+
 Options:
-  --rskj-jar <path>           Required with --auto-node. Absolute path
-                              to a rskj fat JAR (e.g. rskj-core-X.Y.Z-all.jar).
   --network <name>            Hardhat network identifier (default rsk_regtest).
   --hardhat-tests-path <p>    Path to a rskj-hardhat-tests checkout.
                               Falls back to env HARDHAT_TESTS_PATH, then
@@ -181,6 +246,30 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case "--rskj-jar":
         result.rskjJarPath = expectValue(argv, ++i, arg);
         break;
+      case "--build-mode":
+        result.buildMode = expectValue(argv, ++i, arg);
+        break;
+      case "--release-version":
+        result.releaseVersion = expectValue(argv, ++i, arg);
+        break;
+      case "--powpeg-release-version":
+        result.powpegReleaseVersion = expectValue(argv, ++i, arg);
+        break;
+      case "--rskj-sha":
+        result.rskjSha = expectValue(argv, ++i, arg);
+        break;
+      case "--powpeg-sha":
+        result.powpegSha = expectValue(argv, ++i, arg);
+        break;
+      case "--powpeg-jar":
+        result.powpegJarPath = expectValue(argv, ++i, arg);
+        break;
+      case "--tcpsigner":
+        result.tcpsignerPath = expectValue(argv, ++i, arg);
+        break;
+      case "--cache-dir":
+        result.cacheDir = expectValue(argv, ++i, arg);
+        break;
       case "--network":
         result.hardhatNetwork = expectValue(argv, ++i, arg);
         break;
@@ -233,10 +322,6 @@ export function defaultRunId(now: Date = new Date()): string {
   return `${date}-${time}-${suffix}`;
 }
 
-function resolveJarPath(jarPath: string, cwd: string): string {
-  return isAbsolute(jarPath) ? jarPath : resolve(cwd, jarPath);
-}
-
 /** Pure path-resolution input shape — exposed so {@link resolveConfig} can be unit-tested. */
 export interface ResolveOptions {
   /**
@@ -281,19 +366,7 @@ export function resolveConfig(parsed: ParsedArgs, options: ResolveOptions): Driv
   if (!parsed.autoNode && !parsed.rpcUrl) {
     throw new Error("Missing required option: either --rpc-url <url> or --auto-node.");
   }
-  if (parsed.autoNode && !parsed.rskjJarPath) {
-    throw new Error("--auto-node requires --rskj-jar <path>.");
-  }
-  const rskjJarPath = parsed.rskjJarPath ? resolveJarPath(parsed.rskjJarPath, cwd) : undefined;
-  if (parsed.autoNode && rskjJarPath) {
-    // Validate up-front so the error mentions the flag, not "java: no such file".
-    if (!pathExists(rskjJarPath)) {
-      throw new Error(
-        `--rskj-jar path does not exist: ${rskjJarPath}. ` +
-          `Build a fat JAR with \`./gradlew fatJar\` in the rskj source tree, or point at a prebuilt one.`,
-      );
-    }
-  }
+  const { buildSpec, rskjJarPath } = resolveBuildSource(parsed, cwd, pathExists);
 
   const repoParent = dirname(options.repoRoot);
   const hardhatTestsPath = resolvePathFlag(
@@ -337,10 +410,172 @@ export function resolveConfig(parsed: ParsedArgs, options: ResolveOptions): Driv
   if (rskjJarPath) {
     result.rskjJarPath = rskjJarPath;
   }
+  if (buildSpec) {
+    result.buildSpec = buildSpec;
+  }
   if (parsed.rskjVersion) {
     result.rskjVersion = parsed.rskjVersion;
   }
   return result;
+}
+
+/**
+ * Turn the build-sourcing flags into a {@link BuildSourceSpec} (and,
+ * for custom mode, the validated rskj jar path the legacy config field
+ * carries).
+ *
+ * Rules:
+ *
+ *   - Every build flag requires `--auto-node` — binaries are only ever
+ *     consumed to boot the node. `--rpc-url` runs pass through with no
+ *     build spec at all.
+ *   - No `--build-mode` + `--rskj-jar` = sugar for custom mode
+ *     (backward compatibility with the pre-build-modes CLI).
+ *   - Flags belonging to a different mode than the selected one are
+ *     rejected, not ignored — a silently-ignored `--rskj-sha` next to
+ *     `--build-mode release` would test the wrong binary.
+ *   - custom-mode paths are validated to exist here so the error names
+ *     the flag; release / sha artifacts don't exist yet at config time.
+ */
+function resolveBuildSource(
+  parsed: ParsedArgs,
+  cwd: string,
+  pathExists: (p: string) => boolean,
+): { buildSpec?: BuildSourceSpec; rskjJarPath?: string } {
+  if (!parsed.autoNode) {
+    const given = listGivenFlags(parsed, [
+      "buildMode",
+      "releaseVersion",
+      "powpegReleaseVersion",
+      "rskjSha",
+      "powpegSha",
+      "powpegJarPath",
+      "tcpsignerPath",
+      "cacheDir",
+    ]);
+    if (given.length > 0) {
+      throw new Error(`${given.join(", ")} require(s) --auto-node.`);
+    }
+    return {};
+  }
+
+  const mode = parsed.buildMode ?? (parsed.rskjJarPath ? "custom" : undefined);
+  if (mode === undefined) {
+    throw new Error("--auto-node requires --rskj-jar <path> (or an explicit --build-mode).");
+  }
+  const cacheDir = parsed.cacheDir ? resolveCwdRelative(parsed.cacheDir, cwd) : undefined;
+
+  switch (mode) {
+    case "custom": {
+      rejectForeignFlags("custom", parsed, [
+        "releaseVersion",
+        "powpegReleaseVersion",
+        "rskjSha",
+        "powpegSha",
+      ]);
+      if (!parsed.rskjJarPath) {
+        throw new Error("--build-mode custom requires --rskj-jar <path>.");
+      }
+      const rskjJarPath = resolveCwdRelative(parsed.rskjJarPath, cwd);
+      // Validate up-front so the error mentions the flag, not "java: no such file".
+      if (!pathExists(rskjJarPath)) {
+        throw new Error(
+          `--rskj-jar path does not exist: ${rskjJarPath}. ` +
+            `Build a fat JAR with \`./gradlew fatJar\` in the rskj source tree, or point at a prebuilt one.`,
+        );
+      }
+      const powpegJarPath = parsed.powpegJarPath
+        ? resolveCwdRelative(parsed.powpegJarPath, cwd)
+        : undefined;
+      if (powpegJarPath && !pathExists(powpegJarPath)) {
+        throw new Error(`--powpeg-jar path does not exist: ${powpegJarPath}.`);
+      }
+      const tcpsignerPath = parsed.tcpsignerPath
+        ? resolveCwdRelative(parsed.tcpsignerPath, cwd)
+        : undefined;
+      if (tcpsignerPath && !pathExists(tcpsignerPath)) {
+        throw new Error(`--tcpsigner path does not exist: ${tcpsignerPath}.`);
+      }
+      return {
+        buildSpec: {
+          mode: "custom",
+          rskjJar: rskjJarPath,
+          ...(powpegJarPath ? { powpegJar: powpegJarPath } : {}),
+          ...(tcpsignerPath ? { tcpsigner: tcpsignerPath } : {}),
+        },
+        rskjJarPath,
+      };
+    }
+    case "release": {
+      rejectForeignFlags("release", parsed, [
+        "rskjJarPath",
+        "powpegJarPath",
+        "tcpsignerPath",
+        "rskjSha",
+        "powpegSha",
+      ]);
+      if (!parsed.releaseVersion) {
+        throw new Error("--build-mode release requires --release-version <v>.");
+      }
+      return {
+        buildSpec: {
+          mode: "release",
+          rskjVersion: parsed.releaseVersion,
+          ...(parsed.powpegReleaseVersion ? { powpegVersion: parsed.powpegReleaseVersion } : {}),
+          ...(cacheDir ? { cacheDir } : {}),
+        },
+      };
+    }
+    case "sha": {
+      rejectForeignFlags("sha", parsed, [
+        "rskjJarPath",
+        "powpegJarPath",
+        "tcpsignerPath",
+        "releaseVersion",
+        "powpegReleaseVersion",
+      ]);
+      if (!parsed.rskjSha) {
+        throw new Error(
+          "--build-mode sha requires --rskj-sha <ref> with --auto-node " +
+            "(the driver boots the rskj node from it).",
+        );
+      }
+      return {
+        buildSpec: {
+          mode: "sha",
+          rskjRef: parsed.rskjSha,
+          ...(parsed.powpegSha ? { powpegRef: parsed.powpegSha } : {}),
+          ...(cacheDir ? { cacheDir } : {}),
+        },
+      };
+    }
+    default:
+      throw new Error(`Unknown --build-mode "${mode}". Expected release, custom, or sha.`);
+  }
+}
+
+/** Flag spellings for the {@link ParsedArgs} keys used in error messages. */
+const FLAG_BY_KEY: Partial<Record<keyof ParsedArgs, string>> = {
+  buildMode: "--build-mode",
+  releaseVersion: "--release-version",
+  powpegReleaseVersion: "--powpeg-release-version",
+  rskjSha: "--rskj-sha",
+  powpegSha: "--powpeg-sha",
+  rskjJarPath: "--rskj-jar",
+  powpegJarPath: "--powpeg-jar",
+  tcpsignerPath: "--tcpsigner",
+  cacheDir: "--cache-dir",
+};
+
+function listGivenFlags(parsed: ParsedArgs, keys: (keyof ParsedArgs)[]): string[] {
+  return keys.filter((k) => parsed[k] !== undefined).map((k) => FLAG_BY_KEY[k] ?? String(k));
+}
+
+function rejectForeignFlags(mode: string, parsed: ParsedArgs, keys: (keyof ParsedArgs)[]): void {
+  const given = listGivenFlags(parsed, keys);
+  if (given.length > 0) {
+    throw new Error(`${given.join(", ")} cannot be combined with --build-mode ${mode}.`);
+  }
 }
 
 function resolvePathFlag(

@@ -61,6 +61,33 @@ export type { HardhatRunnerOptions, HardhatRunnerResult } from "./driver/runners
 export { runK6 } from "./driver/runners/k6.js";
 export type { K6RunnerOptions, K6RunnerResult } from "./driver/runners/k6.js";
 
+// Build sourcing — release / custom / sha binary resolution.
+export {
+  defaultCacheDir,
+  defaultReproducibleBuildsPath,
+  extractSha256ForAsset,
+  powpegReleaseCoordinates,
+  resolveBinaries,
+  resolveCustom,
+  resolveRelease,
+  resolveSha,
+  rskjReleaseCoordinates,
+} from "./build/index.js";
+export type {
+  BinaryProvenance,
+  BuildComponent,
+  BuildMode,
+  BuildSeams,
+  BuildSourceSpec,
+  CustomBuildSpec,
+  FileStat,
+  ReleaseBuildSpec,
+  ReleaseCoordinates,
+  ReleaseVerificationSource,
+  ResolvedBinaries,
+  ShaBuildSpec,
+} from "./build/index.js";
+
 // Orchestrator — single-rskj-node topology (v1).
 export {
   DEFAULT_PORT_RANGE,
