@@ -1,0 +1,39 @@
+{
+  "meta": {
+    "startedAt": "2026-06-10T22:30:25.881Z",
+    "host": "italo-rootstocklabs",
+    "node": "v22.22.3",
+    "powpegJar": "/home/italo/workspace/powpeg-node/build/libs/federate-node-gaslimit-RC1-9.1.0.0-all.jar",
+    "rskjJar": "/home/italo/workspace/rskj/artifacts/rsk.jar",
+    "k": 10,
+    "btcBlocks": 400
+  },
+  "checks": [
+    {
+      "name": "boot",
+      "verdict": "PASS",
+      "detail": "bitcoind + 3 federates + miner ready in 9.3s"
+    },
+    {
+      "name": "federation-formed",
+      "verdict": "PASS",
+      "detail": "all 3 federates report 2N5muMepJizJE1gR7FbHJU6CD18V3BpNF9p"
+    },
+    {
+      "name": "federation-vote",
+      "verdict": "PASS",
+      "detail": "feePerKb 100000 → 150000 (authorizer 0x53f8f6dabd612b6137215ddd7758bb5cdd638922)"
+    },
+    {
+      "name": "exact-k",
+      "verdict": "PASS",
+      "detail": "miner advanced exactly 10 blocks (1 → 11)"
+    },
+    {
+      "name": "cross-node-sync",
+      "verdict": "PASS",
+      "detail": "target block 11 hash 0x067c17c515f7abc9… — genesis-fed-1:match, genesis-fed-2:match, genesis-fed-3:match"
+    }
+  ],
+  "verdict": "PASS"
+}
