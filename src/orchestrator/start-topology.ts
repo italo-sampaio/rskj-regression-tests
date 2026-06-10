@@ -63,6 +63,18 @@ export interface FullTopologyConfig {
   readinessTimeoutMs?: number;
   /** Override the bitcoind config (binary, ports, creds). */
   bitcoind?: Partial<BitcoindConfig>;
+  /**
+   * Turn the miner node's autominer ON (`miner.client.enabled=true`).
+   *
+   * Default false (Model B: blocks come only from serialized `evm_mine`,
+   * which is what a deterministic harness wants). Set true when the miner
+   * faces suites that expect the chain to advance on its own — hardhat / k6
+   * never call `evm_mine`, so they need autonomous blocks. This is
+   * exact-K-safe: there is exactly ONE block producer (the federates keep
+   * `miner.client.enabled=false`) and nothing issues a concurrent
+   * `evm_mine`, so the race the exact-K gate found cannot occur.
+   */
+  minerAutomine?: boolean;
 }
 
 /**
@@ -176,8 +188,11 @@ export async function startFullTopology(
         readinessTimeoutMs,
         log,
         configOverrides: {
-          // Model B: no autominer; blocks come from serialized evm_mine.
-          "miner.client.enabled": false,
+          // Model B by default (serialized evm_mine). minerAutomine flips
+          // the autominer on for suites that expect autonomous blocks
+          // (hardhat / k6) — safe because the federates stay client-off, so
+          // there is exactly one producer and no concurrent evm_mine.
+          "miner.client.enabled": config.minerAutomine === true,
           "miner.server.enabled": true,
           // Peer into the federation mesh (discovery stays off).
           "peer.active": peerActive,
