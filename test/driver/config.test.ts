@@ -119,6 +119,22 @@ describe("driver/config: parseArgs", () => {
     expect(customParsed.tcpsignerPath).to.equal("/signer");
   });
 
+  it("parses the RIT flags", () => {
+    const parsed = parseArgs([
+      "run",
+      "full",
+      "--rpc-url",
+      "http://x",
+      "--rit-tests-path",
+      "/rit",
+      "--powpeg-jar",
+      "/jars/powpeg.jar",
+    ]);
+    expect(parsed.preset).to.equal("full");
+    expect(parsed.ritTestsPath).to.equal("/rit");
+    expect(parsed.powpegJarPath).to.equal("/jars/powpeg.jar");
+  });
+
   it("rejects unknown flags", () => {
     expect(() => parseArgs(["run", "smoke", "--rpc-url", "x", "--what"])).to.throw(
       ArgvError,
@@ -158,6 +174,58 @@ describe("driver/config: resolveConfig", () => {
     expect(config.outputDir).to.match(/^\/work\/reports\//);
     expect(config.runId).to.be.a("string");
     expect(config.failFast).to.equal(false);
+  });
+
+  it("defaults the RIT path to the peer-directory convention", () => {
+    const parsed = parseArgs(["run", "smoke", "--rpc-url", "http://x"]);
+    const config = resolveConfig(parsed, {
+      repoRoot: REPO,
+      env: {},
+      cwd: "/work",
+      pathExists: allowAll,
+    });
+    expect(config.ritTestsPath).to.equal("/work/rootstock-integration-tests");
+    // powpeg jar is optional and unset by default.
+    expect(config.powpegJarPath).to.equal(undefined);
+  });
+
+  it("resolves --rit-tests-path and --powpeg-jar, with env fallbacks", () => {
+    const withFlags = resolveConfig(
+      parseArgs([
+        "run",
+        "full",
+        "--rpc-url",
+        "http://x",
+        "--rit-tests-path",
+        "/opt/rit",
+        "--powpeg-jar",
+        "/jars/powpeg.jar",
+      ]),
+      { repoRoot: REPO, env: { RIT_TESTS_PATH: "/env/rit" }, cwd: "/work", pathExists: allowAll },
+    );
+    expect(withFlags.ritTestsPath).to.equal("/opt/rit");
+    expect(withFlags.powpegJarPath).to.equal("/jars/powpeg.jar");
+
+    const fromEnv = resolveConfig(parseArgs(["run", "full", "--rpc-url", "http://x"]), {
+      repoRoot: REPO,
+      env: { RIT_TESTS_PATH: "/env/rit", POWPEG_NODE_JAR_PATH: "/env/powpeg.jar" },
+      cwd: "/work",
+      pathExists: allowAll,
+    });
+    expect(fromEnv.ritTestsPath).to.equal("/env/rit");
+    expect(fromEnv.powpegJarPath).to.equal("/env/powpeg.jar");
+  });
+
+  it("does NOT force the RIT checkout to exist (only RIT presets need it)", () => {
+    const parsed = parseArgs(["run", "smoke", "--rpc-url", "http://x"]);
+    // RIT peer dir absent, hardhat + k6 present → must still resolve.
+    const config = resolveConfig(parsed, {
+      repoRoot: REPO,
+      env: {},
+      cwd: "/work",
+      pathExists: (p: string) => !p.endsWith("rootstock-integration-tests"),
+    });
+    expect(config.ritTestsPath).to.equal("/work/rootstock-integration-tests");
   });
 
   it("prefers --hardhat-tests-path over env over peer-directory", () => {
@@ -541,5 +609,6 @@ describe("driver/config: usage", () => {
     expect(text).to.include("--powpeg-jar");
     expect(text).to.include("--tcpsigner");
     expect(text).to.include("--cache-dir");
+    expect(text).to.include("--rit-tests-path");
   });
 });
