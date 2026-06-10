@@ -119,6 +119,13 @@ surface, sibling-repo path resolution, and the run-all vs. fail-fast
 failure policy, and [`docs/orchestrator-single-node.md`](docs/orchestrator-single-node.md)
 for the `--auto-node` path and the underlying library API.
 
+`--auto-node` can source its binaries three ways — a local jar
+(`--rskj-jar`, the default), a pinned release (`--build-mode release
+--release-version 9.0.1`), or a git ref it clones and builds
+(`--build-mode sha --rskj-sha <ref>`). See
+[`docs/build-sourcing-modes.md`](docs/build-sourcing-modes.md) for the
+full flag set, verification ladder, and cache layout.
+
 ## Using the orchestrator as a library
 
 The `src/orchestrator/` subtree is re-exported from the package root so
