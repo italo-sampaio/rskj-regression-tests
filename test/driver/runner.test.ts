@@ -11,6 +11,7 @@
 
 import { expect } from "chai";
 import { resolve } from "node:path";
+import type { BuildSourceSpec, ResolvedBinaries } from "../../src/build/types.js";
 import type { DriverConfig } from "../../src/driver/config.js";
 import { exitCodeFor, runDriver } from "../../src/driver/runner.js";
 import type {
@@ -272,6 +273,127 @@ describe("driver/runner: runDriver", () => {
     ]);
     expect(result.report.metadata.rpcUrl).to.equal("http://127.0.0.1:55555");
     expect(result.report.metadata.labels?.autoNode).to.equal("true");
+  });
+
+  it("--auto-node with a build spec resolves binaries BEFORE starting the node and labels provenance", async () => {
+    const events: string[] = [];
+    const fakeHandle = {
+      rpcUrl: "http://127.0.0.1:55555",
+      rpcPort: 55555,
+      p2pPort: 55556,
+      dataDir: "/tmp/fake-data",
+      pid: 1234,
+      ready: async () => {
+        events.push("ready");
+      },
+      stop: async () => {
+        events.push("stop");
+      },
+    };
+    const fakeStart = async (opts: { jarPath: string }): Promise<typeof fakeHandle> => {
+      events.push(`start:${opts.jarPath}`);
+      return fakeHandle;
+    };
+    const resolved: ResolvedBinaries = {
+      rskjJarPath: "/cache/releases/rskj/VETIVER-9.0.1/rskj-core-9.0.1-VETIVER-all.jar",
+      powpegJarPath: "/cache/releases/powpeg/VETIVER-9.0.0.0/federate-node-VETIVER-9.0.0.0-all.jar",
+      provenance: {
+        rskj: {
+          component: "rskj",
+          mode: "release",
+          path: "/cache/releases/rskj/VETIVER-9.0.1/rskj-core-9.0.1-VETIVER-all.jar",
+          sha256: "aa".repeat(32),
+          version: "9.0.1",
+          releaseTag: "VETIVER-9.0.1",
+          verification: "reproducible-builds",
+          cacheHit: true,
+        },
+        powpeg: {
+          component: "powpeg",
+          mode: "release",
+          path: "/cache/releases/powpeg/VETIVER-9.0.0.0/federate-node-VETIVER-9.0.0.0-all.jar",
+          sha256: "bb".repeat(32),
+          releaseTag: "VETIVER-9.0.0.0",
+        },
+      },
+      warnings: ["stale reproducible-builds"],
+    };
+    const fakeResolve = async (spec: BuildSourceSpec): Promise<ResolvedBinaries> => {
+      events.push(`resolve:${spec.mode}`);
+      return resolved;
+    };
+    const fakeHardhat = async (run: HardhatRun): Promise<HardhatRunnerResult> => ({
+      suite: suiteFromOutcome(run.name, "hardhat", true),
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    const fakeK6 = async (run: K6Run): Promise<K6RunnerResult> => ({
+      suite: suiteFromOutcome(run.name, "k6", true),
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    const { overrides } = makeWriters();
+
+    const result = await runDriver(
+      baseConfig({
+        autoNode: true,
+        rpcUrl: "",
+        buildSpec: { mode: "release", rskjVersion: "9.0.1", powpegVersion: "9.0.0.0" },
+      }),
+      {
+        hardhat: fakeHardhat,
+        k6: fakeK6,
+        resolveBinariesFn: fakeResolve,
+        startNodeFn: fakeStart as unknown as Parameters<typeof runDriver>[1] extends infer R
+          ? R extends { startNodeFn?: infer F }
+            ? NonNullable<F>
+            : never
+          : never,
+        ...overrides,
+      },
+    );
+
+    // Resolution happens before the node starts, with the resolved jar.
+    expect(events.slice(0, 3)).to.deep.equal([
+      "resolve:release",
+      "start:/cache/releases/rskj/VETIVER-9.0.1/rskj-core-9.0.1-VETIVER-all.jar",
+      "ready",
+    ]);
+
+    // Provenance lands in the report labels; powpeg is recorded even
+    // though the driver doesn't launch it yet.
+    const labels = result.report.metadata.labels!;
+    expect(labels.buildMode).to.equal("release");
+    expect(labels.rskjSha256).to.equal("aa".repeat(32));
+    expect(labels.rskjReleaseTag).to.equal("VETIVER-9.0.1");
+    expect(labels.powpegSha256).to.equal("bb".repeat(32));
+    expect(labels.powpegReleaseTag).to.equal("VETIVER-9.0.0.0");
+    // The resolved version backfills metadata.rskjVersion when the
+    // caller didn't pass --rskj-version.
+    expect(result.report.metadata.rskjVersion).to.equal("9.0.1");
+  });
+
+  it("--auto-node fails fast when the build spec resolves no rskj jar", async () => {
+    const fakeResolve = async (): Promise<ResolvedBinaries> => ({
+      powpegJarPath: "/cache/builds/powpeg/abc/federate-node-all.jar",
+      provenance: {},
+      warnings: [],
+    });
+    const { overrides } = makeWriters();
+
+    let err: Error | null = null;
+    try {
+      await runDriver(
+        baseConfig({ autoNode: true, rpcUrl: "", buildSpec: { mode: "sha", powpegRef: "abc" } }),
+        { resolveBinariesFn: fakeResolve, ...overrides },
+      );
+    } catch (e) {
+      err = e as Error;
+    }
+    expect(err, "should have thrown").to.not.equal(null);
+    expect(err!.message).to.match(/needs an rskj jar/);
   });
 
   it("--auto-node stops the orchestrator even when a suite throws", async () => {
