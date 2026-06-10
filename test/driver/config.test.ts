@@ -68,6 +68,57 @@ describe("driver/config: parseArgs", () => {
     expect(parsed.failFast).to.equal(true);
   });
 
+  it("collects the build-sourcing options", () => {
+    const parsed = parseArgs([
+      "run",
+      "smoke",
+      "--auto-node",
+      "--build-mode",
+      "release",
+      "--release-version",
+      "9.0.1",
+      "--powpeg-release-version",
+      "9.0.0.0",
+      "--cache-dir",
+      "/var/cache/rr",
+    ]);
+    expect(parsed.buildMode).to.equal("release");
+    expect(parsed.releaseVersion).to.equal("9.0.1");
+    expect(parsed.powpegReleaseVersion).to.equal("9.0.0.0");
+    expect(parsed.cacheDir).to.equal("/var/cache/rr");
+
+    const shaParsed = parseArgs([
+      "run",
+      "smoke",
+      "--auto-node",
+      "--build-mode",
+      "sha",
+      "--rskj-sha",
+      "abc123",
+      "--powpeg-sha",
+      "def456",
+    ]);
+    expect(shaParsed.rskjSha).to.equal("abc123");
+    expect(shaParsed.powpegSha).to.equal("def456");
+
+    const customParsed = parseArgs([
+      "run",
+      "smoke",
+      "--auto-node",
+      "--build-mode",
+      "custom",
+      "--rskj-jar",
+      "/r.jar",
+      "--powpeg-jar",
+      "/p.jar",
+      "--tcpsigner",
+      "/signer",
+    ]);
+    expect(customParsed.rskjJarPath).to.equal("/r.jar");
+    expect(customParsed.powpegJarPath).to.equal("/p.jar");
+    expect(customParsed.tcpsignerPath).to.equal("/signer");
+  });
+
   it("rejects unknown flags", () => {
     expect(() => parseArgs(["run", "smoke", "--rpc-url", "x", "--what"])).to.throw(
       ArgvError,
@@ -249,6 +300,204 @@ describe("driver/config: resolveConfig", () => {
     expect(config.rskjJarPath).to.equal("/my/work/build/libs/rskj-all.jar");
   });
 
+  it("backward compat: --auto-node --rskj-jar synthesizes a custom-mode build spec", () => {
+    const parsed = parseArgs(["run", "smoke", "--auto-node", "--rskj-jar", "/abs/rskj.jar"]);
+    const config = resolveConfig(parsed, {
+      repoRoot: REPO,
+      env: {},
+      cwd: "/work",
+      pathExists: allowAll,
+    });
+    expect(config.rskjJarPath).to.equal("/abs/rskj.jar");
+    expect(config.buildSpec).to.deep.equal({ mode: "custom", rskjJar: "/abs/rskj.jar" });
+  });
+
+  it("--rpc-url runs carry no build spec at all", () => {
+    const parsed = parseArgs(["run", "smoke", "--rpc-url", "http://x"]);
+    const config = resolveConfig(parsed, {
+      repoRoot: REPO,
+      env: {},
+      cwd: "/work",
+      pathExists: allowAll,
+    });
+    expect(config.buildSpec).to.equal(undefined);
+  });
+
+  it("rejects build flags without --auto-node", () => {
+    const parsed = parseArgs([
+      "run",
+      "smoke",
+      "--rpc-url",
+      "http://x",
+      "--build-mode",
+      "release",
+      "--release-version",
+      "9.0.1",
+    ]);
+    expect(() =>
+      resolveConfig(parsed, { repoRoot: REPO, env: {}, cwd: "/work", pathExists: allowAll }),
+    ).to.throw(/--build-mode, --release-version require\(s\) --auto-node/);
+  });
+
+  it("rejects an unknown --build-mode", () => {
+    const parsed = parseArgs(["run", "smoke", "--auto-node", "--build-mode", "docker"]);
+    expect(() =>
+      resolveConfig(parsed, { repoRoot: REPO, env: {}, cwd: "/work", pathExists: allowAll }),
+    ).to.throw(/Unknown --build-mode "docker"/);
+  });
+
+  it("--build-mode release requires --release-version and builds the spec", () => {
+    const bad = parseArgs(["run", "smoke", "--auto-node", "--build-mode", "release"]);
+    expect(() =>
+      resolveConfig(bad, { repoRoot: REPO, env: {}, cwd: "/work", pathExists: allowAll }),
+    ).to.throw(/--build-mode release requires --release-version/);
+
+    const good = parseArgs([
+      "run",
+      "smoke",
+      "--auto-node",
+      "--build-mode",
+      "release",
+      "--release-version",
+      "9.0.1",
+      "--powpeg-release-version",
+      "9.0.0.0",
+      "--cache-dir",
+      "cache",
+    ]);
+    const config = resolveConfig(good, {
+      repoRoot: REPO,
+      env: {},
+      cwd: "/work",
+      pathExists: allowAll,
+    });
+    expect(config.buildSpec).to.deep.equal({
+      mode: "release",
+      rskjVersion: "9.0.1",
+      powpegVersion: "9.0.0.0",
+      cacheDir: "/work/cache", // relative --cache-dir resolves against cwd
+    });
+    expect(config.rskjJarPath).to.equal(undefined);
+  });
+
+  it("--build-mode sha requires --rskj-sha and builds the spec", () => {
+    const bad = parseArgs([
+      "run",
+      "smoke",
+      "--auto-node",
+      "--build-mode",
+      "sha",
+      "--powpeg-sha",
+      "def456",
+    ]);
+    expect(() =>
+      resolveConfig(bad, { repoRoot: REPO, env: {}, cwd: "/work", pathExists: allowAll }),
+    ).to.throw(/--build-mode sha requires --rskj-sha/);
+
+    const good = parseArgs([
+      "run",
+      "smoke",
+      "--auto-node",
+      "--build-mode",
+      "sha",
+      "--rskj-sha",
+      "abc123",
+      "--powpeg-sha",
+      "def456",
+    ]);
+    const config = resolveConfig(good, {
+      repoRoot: REPO,
+      env: {},
+      cwd: "/work",
+      pathExists: allowAll,
+    });
+    expect(config.buildSpec).to.deep.equal({
+      mode: "sha",
+      rskjRef: "abc123",
+      powpegRef: "def456",
+    });
+  });
+
+  it("--build-mode custom validates every supplied path", () => {
+    const parsed = parseArgs([
+      "run",
+      "smoke",
+      "--auto-node",
+      "--build-mode",
+      "custom",
+      "--rskj-jar",
+      "/r.jar",
+      "--powpeg-jar",
+      "/missing-p.jar",
+    ]);
+    expect(() =>
+      resolveConfig(parsed, {
+        repoRoot: REPO,
+        env: {},
+        cwd: "/work",
+        pathExists: (p: string) => !p.includes("missing"),
+      }),
+    ).to.throw(/--powpeg-jar path does not exist/);
+  });
+
+  it("--build-mode custom carries powpeg + tcpsigner into the spec", () => {
+    const parsed = parseArgs([
+      "run",
+      "smoke",
+      "--auto-node",
+      "--rskj-jar",
+      "/r.jar",
+      "--powpeg-jar",
+      "/p.jar",
+      "--tcpsigner",
+      "signer/tcpsigner",
+    ]);
+    const config = resolveConfig(parsed, {
+      repoRoot: REPO,
+      env: {},
+      cwd: "/work",
+      pathExists: allowAll,
+    });
+    expect(config.buildSpec).to.deep.equal({
+      mode: "custom",
+      rskjJar: "/r.jar",
+      powpegJar: "/p.jar",
+      tcpsigner: "/work/signer/tcpsigner",
+    });
+  });
+
+  it("rejects flags that belong to a different build mode", () => {
+    const parsed = parseArgs([
+      "run",
+      "smoke",
+      "--auto-node",
+      "--build-mode",
+      "release",
+      "--release-version",
+      "9.0.1",
+      "--rskj-sha",
+      "abc123",
+    ]);
+    expect(() =>
+      resolveConfig(parsed, { repoRoot: REPO, env: {}, cwd: "/work", pathExists: allowAll }),
+    ).to.throw(/--rskj-sha cannot be combined with --build-mode release/);
+
+    const shaWithJar = parseArgs([
+      "run",
+      "smoke",
+      "--auto-node",
+      "--build-mode",
+      "sha",
+      "--rskj-sha",
+      "abc123",
+      "--rskj-jar",
+      "/r.jar",
+    ]);
+    expect(() =>
+      resolveConfig(shaWithJar, { repoRoot: REPO, env: {}, cwd: "/work", pathExists: allowAll }),
+    ).to.throw(/--rskj-jar cannot be combined with --build-mode sha/);
+  });
+
   it("throws when the resolved hardhat-tests path does not exist", () => {
     const parsed = parseArgs(["run", "smoke", "--rpc-url", "http://x"]);
     expect(() =>
@@ -284,5 +533,13 @@ describe("driver/config: usage", () => {
     expect(text).to.include("--fail-fast");
     expect(text).to.include("--hardhat-tests-path");
     expect(text).to.include("--k6-tests-path");
+    expect(text).to.include("--build-mode");
+    expect(text).to.include("--release-version");
+    expect(text).to.include("--powpeg-release-version");
+    expect(text).to.include("--rskj-sha");
+    expect(text).to.include("--powpeg-sha");
+    expect(text).to.include("--powpeg-jar");
+    expect(text).to.include("--tcpsigner");
+    expect(text).to.include("--cache-dir");
   });
 });
