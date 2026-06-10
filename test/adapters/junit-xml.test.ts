@@ -82,6 +82,24 @@ describe("adapter: adaptJUnitXml", () => {
     expect(merged[0]!.verdict.durationMs).to.equal(3000);
   });
 
+  it("tags merged suites with kind 'rit' for the RIT runner", () => {
+    // RIT emits one <testsuite> per spec file; the runner merges them under
+    // a single kind:'rit' suite.
+    const xml = `<testsuites name="Mocha Tests" tests="3" failures="0" time="3.0">
+  <testsuite name="Sync" time="1.0"><testcase name="boots" time="1.0"/></testsuite>
+  <testsuite name="Bridge" time="2.0">
+    <testcase name="ok" time="1.0"/>
+    <testcase name="ok2" time="1.0"/>
+  </testsuite>
+</testsuites>`;
+    const [suite] = adaptJUnitXml(xml, { suiteName: "rit-2wp-smoke", kind: "rit", merge: true });
+    expect(suite!.kind).to.equal("rit");
+    expect(suite!.name).to.equal("rit-2wp-smoke");
+    expect(suite!.verdict.total).to.equal(3);
+    expect(suite!.verdict.passed).to.equal(3);
+    expect(suite!.verdict.durationMs).to.equal(3000);
+  });
+
   it("accepts the checked-in hardhat sample and produces a coherent suite", () => {
     const xml = readFileSync(SAMPLE_HARDHAT, "utf-8");
     const suite = adaptHardhatJUnit(xml);

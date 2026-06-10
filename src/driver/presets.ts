@@ -1,13 +1,13 @@
 /**
  * Driver presets — declarative bundles of suites the driver runs together.
  *
- * Each preset names a set of hardhat and/or k6 scenarios. The driver
+ * Each preset names a set of hardhat, k6 and/or RIT scenarios. The driver
  * resolves a preset name into a {@link DriverPlan} that the orchestrating
  * code (see `runner.ts`) hands to the suite runners.
  *
- * Keep the catalogue intentionally small for the POC: a single
- * commit-time `smoke` preset is enough to exercise the aggregation pipeline.
- * Heavier release-time bundles are out of scope for this task.
+ * The catalogue stays intentionally small: a `smoke` preset (commit-time
+ * gating: hardhat + k6) and a `full` preset that adds the powpeg 2WP
+ * integration smoke via RIT. Heavier release-time bundles are out of scope.
  *
  * Decisions locked in here:
  *  - **hardhat**: the smoke subset (`[smoke]` describe-tag, already wired
@@ -21,7 +21,7 @@
  */
 
 /** Logical kind of suite invocation. */
-export type SuiteRunKind = "hardhat" | "k6";
+export type SuiteRunKind = "hardhat" | "k6" | "rit";
 
 /** One hardhat invocation. The driver knows how to map this to a hardhat CLI call. */
 export interface HardhatRun {
@@ -69,7 +69,39 @@ export interface K6Run {
   duration?: string;
 }
 
-export type SuiteRun = HardhatRun | K6Run;
+/**
+ * One RIT (rootstock-integration-tests) invocation.
+ *
+ * RIT self-orchestrates: its Mocha global before-hook boots its own
+ * bitcoind + three powpeg federate JVMs, so — unlike hardhat / k6 — there is
+ * NO external RPC target. The driver shells out to `mocha` with RIT on its
+ * default spec (the repo-root `test.js`) and selects a subset purely via the
+ * `INCLUDE_CASES` env var. See `src/driver/runners/rit.ts` for the full
+ * env contract and the subset-selection gotcha.
+ */
+export interface RitRun {
+  kind: "rit";
+  /** Logical name surfaced in the unified report (e.g. `rit-2wp-smoke`). */
+  name: string;
+  /** Human-readable description. */
+  description?: string;
+  /**
+   * Filename-prefix subset, mapped to `INCLUDE_CASES` (comma-joined). Each
+   * entry matches RIT spec files by `path.basename(...).startsWith(entry)`
+   * (see `needsToBeTested` in RIT's `test.js`). Omit / leave empty to run
+   * the full suite. NOTE: subsets that rely on shared blockchain state must
+   * include the bootstrap sync test (`00_00_01-sync`) first.
+   */
+  includeCases?: string[];
+  /**
+   * Path the JUnit XML report is written to (surfaced as `MOCHA_FILE`),
+   * *relative to the driver output directory* unless absolute. The runner
+   * reads this file after the run and feeds it to `adaptJUnitXml`.
+   */
+  reportRelPath: string;
+}
+
+export type SuiteRun = HardhatRun | K6Run | RitRun;
 
 /** A named bundle of suite invocations. */
 export interface Preset {
@@ -104,8 +136,41 @@ const SMOKE: Preset = {
   ],
 };
 
+/**
+ * Release-ish bundle that adds the powpeg 2WP integration smoke on top of
+ * the commit-time `smoke` runs.
+ *
+ * The RIT entry runs the bootstrap sync test plus the canonical
+ * bridge-method calls test. `00_00_01-sync` MUST come first — it boots the
+ * full 3-fed federation and mines the initial chain that subsequent tests
+ * assert against (RIT tests share blockchain state and run sequentially).
+ *
+ * RIT self-orchestrates, so this preset works the same whether the rest of
+ * the driver runs with `--auto-node` or against a pre-running node: the RIT
+ * runner ignores both and boots its own cluster.
+ */
+const FULL: Preset = {
+  name: "full",
+  description:
+    "Commit-time smoke (hardhat + k6) PLUS a powpeg 2WP integration smoke via RIT. " +
+    "RIT self-orchestrates its own bitcoind + 3-federate cluster.",
+  runs: [
+    ...SMOKE.runs,
+    {
+      kind: "rit",
+      name: "rit-2wp-smoke",
+      description:
+        "rootstock-integration-tests: federation sync bootstrap + bridge-method calls " +
+        "(boots bitcoind + 3 powpeg federate JVMs in-process)",
+      includeCases: ["00_00_01-sync", "01_01_02-calls-to-bridge-methods"],
+      reportRelPath: "rit/rit-2wp-smoke.xml",
+    },
+  ],
+};
+
 const PRESETS: Record<string, Preset> = {
   smoke: SMOKE,
+  full: FULL,
 };
 
 /**
