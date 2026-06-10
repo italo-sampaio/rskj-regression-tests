@@ -108,6 +108,13 @@ export interface Preset {
   name: string;
   description: string;
   runs: SuiteRun[];
+  /**
+   * When true, `--auto-node` brings up the FULL topology (bitcoind + 3
+   * federators + a vanilla miner node) instead of a single rskj node, and
+   * points the node-facing suites (hardhat / k6) at the miner. Requires a
+   * powpeg jar (via `--powpeg-jar` or a build spec). Default false.
+   */
+  requiresTopology?: boolean;
 }
 
 /* -------------------------------------------------------------------------- *
@@ -153,7 +160,9 @@ const FULL: Preset = {
   name: "full",
   description:
     "Commit-time smoke (hardhat + k6) PLUS a powpeg 2WP integration smoke via RIT. " +
-    "RIT self-orchestrates its own bitcoind + 3-federate cluster.",
+    "With --auto-node the hardhat/k6 node is the vanilla miner of the full topology " +
+    "(bitcoind + 3 federators + miner); RIT additionally self-orchestrates its own cluster.",
+  requiresTopology: true,
   runs: [
     ...SMOKE.runs,
     {

@@ -34,6 +34,8 @@ import { adaptK6Summary } from "../adapters/k6.js";
 import { resolveBinaries } from "../build/resolve-binaries.js";
 import type { ResolvedBinaries } from "../build/types.js";
 import { startRskjNode } from "../orchestrator/start-rskj-node.js";
+import { startFullTopology } from "../orchestrator/start-topology.js";
+import type { FullTopologyHandle } from "../orchestrator/start-topology.js";
 import type { RskjNodeHandle } from "../orchestrator/topology.js";
 import {
   buildUnifiedReport,
@@ -88,6 +90,12 @@ export interface RunnerOverrides {
    */
   startNodeFn?: typeof startRskjNode;
   /**
+   * Override the full-topology entry point — used by `--auto-node` tests of
+   * a `requiresTopology` preset to inject a stub handle without spawning
+   * bitcoind + four JVMs. Production callers omit this.
+   */
+  startTopologyFn?: typeof startFullTopology;
+  /**
    * Override the build-sourcing resolver — used by tests to inject a
    * stub {@link ResolvedBinaries} without downloading / building
    * anything. Production callers omit this.
@@ -113,6 +121,7 @@ export async function runDriver(
   const k6Runner = overrides.k6 ?? runK6;
   const ritRunner = overrides.rit ?? runRit;
   const startNodeFn = overrides.startNodeFn ?? startRskjNode;
+  const startTopologyFn = overrides.startTopologyFn ?? startFullTopology;
   const resolveBinariesFn = overrides.resolveBinariesFn ?? resolveBinaries;
 
   const preset = getPreset(config.preset);
@@ -122,6 +131,7 @@ export async function runDriver(
   // runs. The resulting `rpcUrl` is patched onto the (otherwise immutable)
   // config so suites and the report metadata see the same value.
   let nodeHandle: RskjNodeHandle | null = null;
+  let topologyHandle: FullTopologyHandle | null = null;
   let effectiveConfig = config;
   let resolvedBinaries: ResolvedBinaries | null = null;
   if (config.autoNode) {
@@ -153,16 +163,40 @@ export async function runDriver(
           "resolveConfig should have caught this",
       );
     }
-    log(`[driver] --auto-node set; spinning up rskj regtest node from ${rskjJarPath}`);
-    nodeHandle = await startNodeFn({
-      jarPath: rskjJarPath,
-      log: (line: string) => log(`[rskj] ${line}`),
-    });
-    log(`[driver] node pid=${nodeHandle.pid} rpc=${nodeHandle.rpcUrl} p2p=${nodeHandle.p2pPort}`);
-    log(`[driver] waiting for RPC readiness...`);
-    await nodeHandle.ready();
-    log(`[driver] node ready at ${nodeHandle.rpcUrl}`);
-    effectiveConfig = { ...config, rpcUrl: nodeHandle.rpcUrl };
+    if (preset.requiresTopology) {
+      // Full-topology preset: bring up bitcoind + 3 federators + the vanilla
+      // miner, and point the node-facing suites (hardhat / k6) at the miner.
+      // The miner runs its autominer (minerAutomine) because those suites
+      // never call evm_mine; this is exact-K-safe (single producer, no
+      // concurrent evm_mine). RIT still self-orchestrates its own cluster.
+      const powpegJarPath = resolvedBinaries?.powpegJarPath ?? config.powpegJarPath;
+      if (!powpegJarPath) {
+        throw new Error(
+          `preset "${preset.name}" requires a powpeg jar for the full topology — ` +
+            "pass --powpeg-jar <path> or a build spec that resolves one.",
+        );
+      }
+      log(`[driver] --auto-node + full topology; rskj=${rskjJarPath} powpeg=${powpegJarPath}`);
+      topologyHandle = await startTopologyFn({
+        powpegJarPath,
+        rskjJarPath,
+        minerAutomine: true,
+        log: (line: string) => log(`[topology] ${line}`),
+      });
+      log(`[driver] topology up; mining node at ${topologyHandle.miningRpcUrl}`);
+      effectiveConfig = { ...config, rpcUrl: topologyHandle.miningRpcUrl };
+    } else {
+      log(`[driver] --auto-node set; spinning up rskj regtest node from ${rskjJarPath}`);
+      nodeHandle = await startNodeFn({
+        jarPath: rskjJarPath,
+        log: (line: string) => log(`[rskj] ${line}`),
+      });
+      log(`[driver] node pid=${nodeHandle.pid} rpc=${nodeHandle.rpcUrl} p2p=${nodeHandle.p2pPort}`);
+      log(`[driver] waiting for RPC readiness...`);
+      await nodeHandle.ready();
+      log(`[driver] node ready at ${nodeHandle.rpcUrl}`);
+      effectiveConfig = { ...config, rpcUrl: nodeHandle.rpcUrl };
+    }
   }
 
   log(
@@ -247,6 +281,14 @@ export async function runDriver(
         await nodeHandle.stop();
       } catch (err) {
         log(`[driver] auto-node stop failed: ${(err as Error).message}`);
+      }
+    }
+    if (topologyHandle) {
+      log("[driver] tearing down full topology");
+      try {
+        await topologyHandle.stop();
+      } catch (err) {
+        log(`[driver] topology teardown failed: ${(err as Error).message}`);
       }
     }
   }
