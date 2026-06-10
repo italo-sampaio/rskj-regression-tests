@@ -33,3 +33,30 @@ export type { RpcReadinessOptions } from "./rpc-readiness.js";
 
 export { defaultRskjConfig, mergeConfig, renderHocon } from "./regtest-config.js";
 export type { ConfigValue, DefaultConfigInputs, FlatConfig } from "./regtest-config.js";
+
+// Full-topology surface (bitcoind + genesis federation + vanilla miner).
+export { startFullTopology } from "./start-topology.js";
+export type {
+  FullTopologyConfig,
+  FullTopologyHandle,
+  FullTopologyHooks,
+} from "./start-topology.js";
+
+export { spawnBitcoind } from "./bitcoind-runner.js";
+export type { BitcoindConfig, BitcoindHandle, BitcoindRunnerHooks } from "./bitcoind-runner.js";
+
+export { spawnFederate, renderFederateConfig } from "./federate-runner.js";
+export type { FederateConfig, FederateHandle, FederateRunnerHooks } from "./federate-runner.js";
+
+export {
+  BRIDGE_ADDRESS,
+  BRIDGE_SELECTORS,
+  FEE_PER_KB_AUTHORIZER,
+  GENESIS_FEDERATION,
+  GENESIS_FEDERATION_BTC_ADDRESS,
+  GENESIS_FEE_PER_KB_SATS,
+  MAX_FEE_PER_KB_SATS,
+  peerActiveWiring,
+  forkActivationOverrides,
+} from "./federation/genesis-federation.js";
+export type { GenesisFederationMember } from "./federation/genesis-federation.js";
