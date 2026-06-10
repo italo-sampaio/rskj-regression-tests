@@ -441,6 +441,95 @@ describe("driver/runner: runDriver", () => {
     expect(err, "runDriver should propagate the suite failure").to.not.equal(null);
     expect(events).to.deep.equal(["stop"]);
   });
+
+  it("a requiresTopology preset + --auto-node brings up the full topology and points suites at the miner", async () => {
+    const events: string[] = [];
+    const fakeTopology = async (cfg: {
+      powpegJarPath: string;
+      rskjJarPath?: string;
+      minerAutomine?: boolean;
+    }) => {
+      events.push(
+        `topology:rskj=${cfg.rskjJarPath}:powpeg=${cfg.powpegJarPath}:automine=${cfg.minerAutomine}`,
+      );
+      return {
+        bitcoind: {} as never,
+        federates: [] as never,
+        miner: null,
+        miningRpcUrl: "http://127.0.0.1:30010",
+        stop: async () => {
+          events.push("topology-stop");
+        },
+      };
+    };
+    const fakeHardhat = async (
+      run: HardhatRun,
+      opts: HardhatRunnerOptions,
+    ): Promise<HardhatRunnerResult> => {
+      events.push(`hardhat:${opts.rpcUrl}`);
+      return {
+        suite: suiteFromOutcome(run.name, "hardhat", true),
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+      };
+    };
+    const fakeK6 = async (run: K6Run, opts: K6RunnerOptions): Promise<K6RunnerResult> => {
+      events.push(`k6:${opts.rpcUrl}`);
+      return { suite: suiteFromOutcome(run.name, "k6", true), exitCode: 0, stdout: "", stderr: "" };
+    };
+    const fakeRit = async (run: RitRun): Promise<RitRunnerResult> => ({
+      suite: { name: run.name, kind: "rit", verdict: computeSuiteVerdict([], 0), tests: [] },
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    const { overrides } = makeWriters();
+
+    const result = await runDriver(
+      baseConfig({
+        preset: "full",
+        autoNode: true,
+        rskjJarPath: "/abs/rskj.jar",
+        powpegJarPath: "/abs/powpeg.jar",
+        rpcUrl: "",
+      }),
+      {
+        hardhat: fakeHardhat,
+        k6: fakeK6,
+        rit: fakeRit,
+        startTopologyFn: fakeTopology as unknown as Parameters<typeof runDriver>[1] extends infer R
+          ? R extends { startTopologyFn?: infer F }
+            ? NonNullable<F>
+            : never
+          : never,
+        ...overrides,
+      },
+    );
+
+    // The topology came up with automine on, hardhat+k6 hit the miner's RPC,
+    // and the topology was torn down.
+    expect(events).to.include("topology:rskj=/abs/rskj.jar:powpeg=/abs/powpeg.jar:automine=true");
+    expect(events).to.include("hardhat:http://127.0.0.1:30010");
+    expect(events).to.include("k6:http://127.0.0.1:30010");
+    expect(events).to.include("topology-stop");
+    expect(result.report.metadata.rpcUrl).to.equal("http://127.0.0.1:30010");
+  });
+
+  it("a requiresTopology preset + --auto-node without a powpeg jar fails fast", async () => {
+    const { overrides } = makeWriters();
+    let err: Error | null = null;
+    try {
+      await runDriver(
+        baseConfig({ preset: "full", autoNode: true, rskjJarPath: "/abs/rskj.jar", rpcUrl: "" }),
+        overrides,
+      );
+    } catch (e) {
+      err = e as Error;
+    }
+    expect(err).to.not.equal(null);
+    expect(err!.message).to.match(/requires a powpeg jar/);
+  });
 });
 
 describe("driver/runner: RIT dispatch", () => {
