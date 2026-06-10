@@ -44,7 +44,12 @@ export interface DefaultConfigInputs {
  */
 export type FlatConfig = Record<string, ConfigValue>;
 
-export type ConfigValue = string | number | boolean | ConfigValue[];
+export type ConfigValue =
+  | string
+  | number
+  | boolean
+  | ConfigValue[]
+  | { [key: string]: ConfigValue };
 
 /**
  * Return the baseline HOCON map for a single isolated regtest node.
@@ -147,6 +152,15 @@ export function renderHocon(config: FlatConfig): string {
 function formatValue(value: ConfigValue): string {
   if (Array.isArray(value)) {
     return `[${value.map(formatValue).join(", ")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    // Nested HOCON object — used for list entries like `peer.active`,
+    // whose elements are `{ ip, port, nodeId }` records rather than
+    // scalars. Rendered inline as `{ key = value, ... }`.
+    const inner = Object.entries(value)
+      .map(([k, v]) => `${k} = ${formatValue(v)}`)
+      .join(", ");
+    return `{ ${inner} }`;
   }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
