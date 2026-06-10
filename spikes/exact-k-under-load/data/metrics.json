@@ -14,9 +14,7 @@
       "expectation": "exact",
       "verdict": "PASS",
       "failures": [],
-      "observations": [
-        "evm_mine latency: p50 10.7ms, p99 23.3ms over 60 calls"
-      ],
+      "observations": ["evm_mine latency: p50 10.7ms, p99 23.3ms over 60 calls"],
       "idleDriftBlocks": 0,
       "durationMs": 8826,
       "serializedRecords": [
@@ -529,9 +527,7 @@
       "expectation": "detects-silent-failure",
       "verdict": "PASS",
       "failures": [],
-      "observations": [
-        "oracle detected 3/4 silently swallowed mines (expected)"
-      ],
+      "observations": ["oracle detected 3/4 silently swallowed mines (expected)"],
       "idleDriftBlocks": 0,
       "durationMs": 7620,
       "serializedRecords": [
