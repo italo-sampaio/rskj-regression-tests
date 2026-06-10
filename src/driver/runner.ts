@@ -48,6 +48,7 @@ import { getPreset } from "./presets.js";
 import type { SuiteRun } from "./presets.js";
 import { runHardhat } from "./runners/hardhat.js";
 import { runK6 } from "./runners/k6.js";
+import { runRit } from "./runners/rit.js";
 
 // Re-export so the cli module has one import surface for adapter symbols
 // (used by docs / type-check chains in downstream code).
@@ -69,6 +70,8 @@ export interface DriverResult {
 export interface RunnerOverrides {
   hardhat?: typeof runHardhat;
   k6?: typeof runK6;
+  /** Inject the RIT runner — tests pass a fake; production uses {@link runRit}. */
+  rit?: typeof runRit;
   /**
    * Inject directory + file-write functions for tests so the runner can
    * be exercised end-to-end without touching the real filesystem.
@@ -108,6 +111,7 @@ export async function runDriver(
   const writeFileFn = overrides.writeFileFn ?? ((p: string, c: string) => writeFileSync(p, c));
   const hardhatRunner = overrides.hardhat ?? runHardhat;
   const k6Runner = overrides.k6 ?? runK6;
+  const ritRunner = overrides.rit ?? runRit;
   const startNodeFn = overrides.startNodeFn ?? startRskjNode;
   const resolveBinariesFn = overrides.resolveBinariesFn ?? resolveBinaries;
 
@@ -180,7 +184,7 @@ export async function runDriver(
   try {
     for (const run of preset.runs) {
       log(`[driver] → ${run.kind} :: ${run.name}`);
-      const suite = await runOne(run, effectiveConfig, { hardhatRunner, k6Runner, log });
+      const suite = await runOne(run, effectiveConfig, { hardhatRunner, k6Runner, ritRunner, log });
       suites.push(suite);
       log(
         `[driver] ← ${run.name}: ${suite.verdict.passed_overall ? "PASSED" : "FAILED"} ` +
@@ -256,6 +260,7 @@ export async function runDriver(
 interface DispatchContext {
   hardhatRunner: typeof runHardhat;
   k6Runner: typeof runK6;
+  ritRunner: typeof runRit;
   log: (line: string) => void;
 }
 
@@ -269,6 +274,24 @@ async function runOne(
       hardhatTestsPath: config.hardhatTestsPath,
       rpcUrl: config.rpcUrl,
       network: config.hardhatNetwork,
+      log: ctx.log,
+    });
+    return suite;
+  }
+  if (run.kind === "rit") {
+    // RIT self-orchestrates — it ignores autoNode / rpcUrl entirely. It needs
+    // the powpeg fat JAR; surface a clear error if the caller didn't supply
+    // one (preset author chose a RIT run, so this is operator error).
+    if (!config.powpegJarPath) {
+      throw new Error(
+        "RIT suite requires a powpeg fat JAR. Pass --powpeg-jar <path> " +
+          "or set the POWPEG_NODE_JAR_PATH env var.",
+      );
+    }
+    const { suite } = await ctx.ritRunner(run, {
+      ritTestsPath: config.ritTestsPath,
+      powpegJarPath: config.powpegJarPath,
+      reportPath: resolve(config.outputDir, run.reportRelPath),
       log: ctx.log,
     });
     return suite;

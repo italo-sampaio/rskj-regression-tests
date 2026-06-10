@@ -51,6 +51,12 @@
  *                               (`<repo-parent>/rskj-hardhat-tests`).
  *   `--k6-tests-path <p>`       Local clone of rskj-k6-tests. Same
  *                               fallback chain, env `K6_TESTS_PATH`.
+ *   `--rit-tests-path <p>`      Local clone of rootstock-integration-tests
+ *                               (RIT presets only). Same fallback chain,
+ *                               env `RIT_TESTS_PATH`, peer-dir
+ *                               `<repo-parent>/rootstock-integration-tests`.
+ *   `--powpeg-jar <path>`       Powpeg fat JAR the RIT federates run.
+ *                               RIT presets only. Env `POWPEG_NODE_JAR_PATH`.
  *   `--network <name>`          Hardhat network identifier (default
  *                               `rsk_regtest`). The driver passes this
  *                               through; account env vars are the
@@ -108,6 +114,14 @@ export interface DriverConfig {
   hardhatTestsPath: string;
   /** Resolved absolute path to a checkout of `rskj-k6-tests`. */
   k6TestsPath: string;
+  /** Resolved absolute path to a checkout of `rootstock-integration-tests`. */
+  ritTestsPath: string;
+  /**
+   * Absolute path to the powpeg fat JAR the RIT federates run. Surfaced to
+   * RIT as `POWPEG_NODE_JAR_PATH`. Optional — only required when a preset
+   * includes a RIT run.
+   */
+  powpegJarPath?: string;
   /** Absolute output directory for `{report.json,report.xml,report.md}` + raw suite outputs. */
   outputDir: string;
   /** Run identifier; appears in report metadata + default output-dir name. */
@@ -139,6 +153,7 @@ export interface ParsedArgs {
   hardhatNetwork?: string;
   hardhatTestsPath?: string;
   k6TestsPath?: string;
+  ritTestsPath?: string;
   outputDir?: string;
   runId?: string;
   rskjVersion?: string;
@@ -188,6 +203,13 @@ Options:
   --k6-tests-path <p>         Path to a rskj-k6-tests checkout.
                               Falls back to env K6_TESTS_PATH, then
                               <repo-parent>/rskj-k6-tests.
+  --rit-tests-path <p>        Path to a rootstock-integration-tests checkout
+                              (only used by RIT presets). Falls back to env
+                              RIT_TESTS_PATH, then
+                              <repo-parent>/rootstock-integration-tests.
+  --powpeg-jar <path>         Powpeg fat JAR the RIT federates run (required
+                              by RIT presets). Falls back to env
+                              POWPEG_NODE_JAR_PATH.
   --output-dir <dir>          Output bundle directory.
                               Default ./reports/<run-id>/.
   --run-id <id>               Override the auto-generated run id.
@@ -278,6 +300,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--k6-tests-path":
         result.k6TestsPath = expectValue(argv, ++i, arg);
+        break;
+      case "--rit-tests-path":
+        result.ritTestsPath = expectValue(argv, ++i, arg);
         break;
       case "--output-dir":
         result.outputDir = expectValue(argv, ++i, arg);
@@ -381,9 +406,25 @@ export function resolveConfig(parsed: ParsedArgs, options: ResolveOptions): Driv
     resolve(repoParent, "rskj-k6-tests"),
     cwd,
   );
+  const ritTestsPath = resolvePathFlag(
+    parsed.ritTestsPath,
+    env.RIT_TESTS_PATH,
+    resolve(repoParent, "rootstock-integration-tests"),
+    cwd,
+  );
+  // `--powpeg-jar` falls back to env POWPEG_NODE_JAR_PATH (the same var RIT
+  // itself reads). Resolved relative to cwd. Existence is checked by the RIT
+  // runner / preset path, not here — non-RIT presets don't need it.
+  const powpegJarPath = parsed.powpegJarPath
+    ? resolveCwdRelative(parsed.powpegJarPath, cwd)
+    : env.POWPEG_NODE_JAR_PATH
+      ? resolveCwdRelative(env.POWPEG_NODE_JAR_PATH, cwd)
+      : undefined;
 
   // We validate existence here so the driver fails before forking out to
-  // the suite runners — the error message is much clearer this way.
+  // the suite runners — the error message is much clearer this way. The RIT
+  // checkout is NOT force-validated: it's only needed when a preset includes
+  // a RIT run, and the RIT runner surfaces a clear error if the path is wrong.
   ensureDirectory(hardhatTestsPath, "rskj-hardhat-tests", "HARDHAT_TESTS_PATH", pathExists);
   ensureDirectory(k6TestsPath, "rskj-k6-tests", "K6_TESTS_PATH", pathExists);
 
@@ -403,6 +444,7 @@ export function resolveConfig(parsed: ParsedArgs, options: ResolveOptions): Driv
     hardhatNetwork: parsed.hardhatNetwork ?? "rsk_regtest",
     hardhatTestsPath,
     k6TestsPath,
+    ritTestsPath,
     outputDir,
     runId,
     failFast: parsed.failFast,
@@ -412,6 +454,9 @@ export function resolveConfig(parsed: ParsedArgs, options: ResolveOptions): Driv
   }
   if (buildSpec) {
     result.buildSpec = buildSpec;
+  }
+  if (powpegJarPath) {
+    result.powpegJarPath = powpegJarPath;
   }
   if (parsed.rskjVersion) {
     result.rskjVersion = parsed.rskjVersion;
@@ -443,13 +488,17 @@ function resolveBuildSource(
   pathExists: (p: string) => boolean,
 ): { buildSpec?: BuildSourceSpec; rskjJarPath?: string } {
   if (!parsed.autoNode) {
+    // NB: --powpeg-jar is intentionally absent here. It is dual-purpose —
+    // a custom-build-mode binary when --auto-node is set, but ALSO the
+    // federate jar the self-orchestrating RIT suite consumes (which runs
+    // with --rpc-url and no auto-node). So it must be allowed without
+    // --auto-node; resolveConfig forwards it to the RIT runner.
     const given = listGivenFlags(parsed, [
       "buildMode",
       "releaseVersion",
       "powpegReleaseVersion",
       "rskjSha",
       "powpegSha",
-      "powpegJarPath",
       "tcpsignerPath",
       "cacheDir",
     ]);
