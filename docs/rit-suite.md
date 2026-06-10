@@ -14,7 +14,7 @@ blockchain, and only then loads the spec files.
 
 Consequence: there is nothing for the driver's orchestrator to do. The RIT
 runner ignores `--auto-node` and `--rpc-url` entirely — the driver never even
-passes an RPC URL to it. What RIT *does* need is told where the powpeg fat JAR
+passes an RPC URL to it. What RIT _does_ need is told where the powpeg fat JAR
 and the `bitcoind` binary live; it spawns those itself via environment
 variables.
 
@@ -59,15 +59,15 @@ every test.
 
 The runner sets these env vars for the mocha child (cwd = the RIT checkout):
 
-| Var | Value set by the runner | Notes |
-| --- | --- | --- |
-| `POWPEG_NODE_JAR_PATH` | `--powpeg-jar` / `POWPEG_NODE_JAR_PATH` | **Caller must supply.** The RIT repo's own `.env` default points at a stale SNAPSHOT jar that does not exist on disk. |
-| `BITCOIND_BIN_PATH` | default `/home/italo/workspace/bitcoin-0.18.1/bin/bitcoind` | bitcoind 0.18.1. |
-| `CONFIG_FILE_PATH` | `./config/regtest-all-keyfiles` | Keyfile-only federation — **no HSM / tcpsigner**. |
-| `INCLUDE_CASES` | from the preset's `includeCases` | Omitted when empty (full suite). |
-| `EXEC_ENV` | `Ubuntu` | Non-MACOS native binaries (irrelevant for keyfile config). |
-| `MOCHA_FILE` | absolute report path | Where the JUnit XML is written; resolved against the driver output dir. |
-| `BITCOIN_DATA_DIR` | default `<ritTestsPath>/bitcoin-data` | See gotcha below. |
+| Var                    | Value set by the runner                                     | Notes                                                                                                                 |
+| ---------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `POWPEG_NODE_JAR_PATH` | `--powpeg-jar` / `POWPEG_NODE_JAR_PATH`                     | **Caller must supply.** The RIT repo's own `.env` default points at a stale SNAPSHOT jar that does not exist on disk. |
+| `BITCOIND_BIN_PATH`    | default `/home/italo/workspace/bitcoin-0.18.1/bin/bitcoind` | bitcoind 0.18.1.                                                                                                      |
+| `CONFIG_FILE_PATH`     | `./config/regtest-all-keyfiles`                             | Keyfile-only federation — **no HSM / tcpsigner**.                                                                     |
+| `INCLUDE_CASES`        | from the preset's `includeCases`                            | Omitted when empty (full suite).                                                                                      |
+| `EXEC_ENV`             | `Ubuntu`                                                    | Non-MACOS native binaries (irrelevant for keyfile config).                                                            |
+| `MOCHA_FILE`           | absolute report path                                        | Where the JUnit XML is written; resolved against the driver output dir.                                               |
+| `BITCOIN_DATA_DIR`     | default `<ritTestsPath>/bitcoin-data`                       | See gotcha below.                                                                                                     |
 
 ### The `bitcoin-data` gotcha
 
