@@ -19,7 +19,8 @@ import type {
   HardhatRunnerResult,
 } from "../../src/driver/runners/hardhat.js";
 import type { K6RunnerOptions, K6RunnerResult } from "../../src/driver/runners/k6.js";
-import type { HardhatRun, K6Run } from "../../src/driver/presets.js";
+import type { RitRunnerOptions, RitRunnerResult } from "../../src/driver/runners/rit.js";
+import type { HardhatRun, K6Run, RitRun } from "../../src/driver/presets.js";
 import { computeSuiteVerdict, type UnifiedSuite } from "../../src/report/schema.js";
 
 function suiteFromOutcome(name: string, kind: "hardhat" | "k6", passed: boolean): UnifiedSuite {
@@ -49,6 +50,7 @@ function baseConfig(overrides: Partial<DriverConfig> = {}): DriverConfig {
     hardhatNetwork: "rsk_regtest",
     hardhatTestsPath: "/fake/hardhat",
     k6TestsPath: "/fake/k6",
+    ritTestsPath: "/fake/rit",
     outputDir: "/tmp/driver-test-out",
     runId: "test-run",
     failFast: false,
@@ -438,6 +440,90 @@ describe("driver/runner: runDriver", () => {
     }
     expect(err, "runDriver should propagate the suite failure").to.not.equal(null);
     expect(events).to.deep.equal(["stop"]);
+  });
+});
+
+describe("driver/runner: RIT dispatch", () => {
+  it("dispatches the rit kind to ctx.rit with resolved report path + powpeg jar", async () => {
+    const ritCalls: Array<{ name: string; opts: RitRunnerOptions }> = [];
+    const fakeHardhat = async (run: HardhatRun): Promise<HardhatRunnerResult> => ({
+      suite: suiteFromOutcome(run.name, "hardhat", true),
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    const fakeK6 = async (run: K6Run): Promise<K6RunnerResult> => ({
+      suite: suiteFromOutcome(run.name, "k6", true),
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    const fakeRit = async (run: RitRun, opts: RitRunnerOptions): Promise<RitRunnerResult> => {
+      ritCalls.push({ name: run.name, opts });
+      return {
+        suite: {
+          name: run.name,
+          kind: "rit",
+          verdict: computeSuiteVerdict([{ name: "ok", status: "passed", durationMs: 1 }], 1),
+          tests: [{ name: "ok", status: "passed", durationMs: 1 }],
+        },
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+      };
+    };
+    const { overrides } = makeWriters();
+
+    const result = await runDriver(
+      baseConfig({ preset: "full", powpegJarPath: "/abs/powpeg.jar" }),
+      { hardhat: fakeHardhat, k6: fakeK6, rit: fakeRit, ...overrides },
+    );
+
+    expect(ritCalls).to.have.length(1);
+    expect(ritCalls[0]!.name).to.equal("rit-2wp-smoke");
+    expect(ritCalls[0]!.opts.powpegJarPath).to.equal("/abs/powpeg.jar");
+    expect(ritCalls[0]!.opts.ritTestsPath).to.equal("/fake/rit");
+    // report path resolved against the output dir + the preset's relPath
+    expect(ritCalls[0]!.opts.reportPath).to.equal(
+      resolve("/tmp/driver-test-out/rit/rit-2wp-smoke.xml"),
+    );
+
+    // full = hardhat-smoke + k6 + rit-2wp-smoke
+    expect(result.report.suites.map((s) => s.kind)).to.deep.equal(["hardhat", "k6", "rit"]);
+    expect(result.report.overall.passed_overall).to.equal(true);
+  });
+
+  it("throws a clear error when a rit preset runs without a powpeg jar", async () => {
+    const fakeHardhat = async (run: HardhatRun): Promise<HardhatRunnerResult> => ({
+      suite: suiteFromOutcome(run.name, "hardhat", true),
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    const fakeK6 = async (run: K6Run): Promise<K6RunnerResult> => ({
+      suite: suiteFromOutcome(run.name, "k6", true),
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    const fakeRit = async (): Promise<RitRunnerResult> => {
+      throw new Error("should not be reached");
+    };
+    const { overrides } = makeWriters();
+
+    let err: Error | null = null;
+    try {
+      await runDriver(baseConfig({ preset: "full" }), {
+        hardhat: fakeHardhat,
+        k6: fakeK6,
+        rit: fakeRit,
+        ...overrides,
+      });
+    } catch (e) {
+      err = e as Error;
+    }
+    expect(err, "runDriver should reject when powpegJarPath is missing").to.not.equal(null);
+    expect(err!.message).to.match(/powpeg fat JAR/);
   });
 });
 
