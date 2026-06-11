@@ -76,9 +76,13 @@ function buildHooks(
         },
       };
     }) as FullTopologyHooks["spawnFederateFn"],
-    startRskjNodeFn: (async (cfg: { configOverrides?: Record<string, unknown> }) => {
+    startRskjNodeFn: (async (cfg: {
+      configOverrides?: Record<string, unknown>;
+      rpcPort?: number;
+    }) => {
       events.push({ kind: "miner.spawn" });
       (events as unknown as { minerOverrides?: unknown }).minerOverrides = cfg.configOverrides;
+      (events as unknown as { minerRpcPort?: unknown }).minerRpcPort = cfg.rpcPort;
       return {
         rpcUrl: "http://127.0.0.1:30010",
         rpcPort: 30010,
@@ -129,6 +133,23 @@ describe("orchestrator: startFullTopology", () => {
     expect(peerActive).to.have.length(3);
     expect(peerActive.map((p) => p.port)).to.deep.equal(GENESIS_FEDERATION.map((m) => m.p2pPort));
     await handle.stop();
+  });
+
+  it("pins the miner's RPC port to minerRpcPort when set, else uses an allocated port", async () => {
+    const pinned: Event[] = [];
+    await startFullTopology(
+      { powpegJarPath: "/jars/fed.jar", rskjJarPath: "/jars/rskj.jar", minerRpcPort: 4444 },
+      buildHooks(pinned, []),
+    );
+    expect((pinned as unknown as { minerRpcPort: number }).minerRpcPort).to.equal(4444);
+
+    const allocated: Event[] = [];
+    await startFullTopology(
+      { powpegJarPath: "/jars/fed.jar", rskjJarPath: "/jars/rskj.jar" },
+      buildHooks(allocated, []),
+    );
+    // findFreePortsFn returns [30010, 30011] — the miner takes the first for RPC.
+    expect((allocated as unknown as { minerRpcPort: number }).minerRpcPort).to.equal(30010);
   });
 
   it("omits the miner when no rskjJarPath is given (federation-only)", async () => {

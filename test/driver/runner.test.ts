@@ -569,6 +569,59 @@ describe("driver/runner: runDriver", () => {
     expect(ritPowpegJar).to.equal("/cache/builds/powpeg/def__rskj-abc/federate-node-all.jar");
   });
 
+  it("tears down the full topology before the RIT suite runs", async () => {
+    // RIT self-orchestrates its own federation on the same ports our topology
+    // holds, so the driver must stop the topology before RIT — after the
+    // node-facing suites (hardhat/k6) that DO need it have run.
+    const order: string[] = [];
+    const fakeTopology = async () => ({
+      bitcoind: {} as never,
+      federates: [] as never,
+      miner: null,
+      miningRpcUrl: "http://127.0.0.1:4444",
+      stop: async () => {
+        order.push("topology-stop");
+      },
+    });
+    const fakePassing = async (run: HardhatRun | K6Run) => ({
+      suite: suiteFromOutcome(run.name, "hardhat", true),
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    const fakeRit = async (run: RitRun): Promise<RitRunnerResult> => {
+      order.push("rit-run");
+      return {
+        suite: { name: run.name, kind: "rit", verdict: computeSuiteVerdict([], 0), tests: [] },
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+      };
+    };
+    const { overrides } = makeWriters();
+
+    await runDriver(
+      baseConfig({
+        preset: "full",
+        autoNode: true,
+        rskjJarPath: "/abs/rskj.jar",
+        powpegJarPath: "/abs/powpeg.jar",
+        rpcUrl: "",
+      }),
+      {
+        hardhat: fakePassing as never,
+        k6: fakePassing as never,
+        rit: fakeRit,
+        startTopologyFn: fakeTopology as never,
+        ...overrides,
+      },
+    );
+
+    // The topology is stopped exactly once, before RIT runs (not double-stopped
+    // in the finally).
+    expect(order).to.deep.equal(["topology-stop", "rit-run"]);
+  });
+
   it("a requiresTopology preset + --auto-node without a powpeg jar fails fast", async () => {
     const { overrides } = makeWriters();
     let err: Error | null = null;
