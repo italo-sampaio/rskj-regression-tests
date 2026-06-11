@@ -75,6 +75,14 @@ export interface FullTopologyConfig {
    * `evm_mine`, so the race the exact-K gate found cannot occur.
    */
   minerAutomine?: boolean;
+  /**
+   * Pin the miner node's JSON-RPC port. Default: a free port in
+   * {@link MINER_PORT_RANGE}. Node-facing suites that hardcode a network URL
+   * (e.g. rskj-hardhat-tests' `rsk_regtest` → `http://localhost:4444`) can't
+   * be told our allocated port, so the driver pins the miner to the standard
+   * regtest RPC port they expect. The p2p port is still allocated freely.
+   */
+  minerRpcPort?: number;
 }
 
 /**
@@ -173,7 +181,11 @@ export async function startFullTopology(
     let miner: RskjNodeHandle | null = null;
     if (config.rskjJarPath) {
       log("[topology] starting vanilla rskj miner node…");
-      const [rpcPort, p2pPort] = await findFreePortsFn(2, MINER_PORT_RANGE);
+      // Allocate two free ports; when a fixed miner RPC port is requested
+      // (suites that hardcode their network URL), use it and keep the freely
+      // allocated one for p2p.
+      const [allocatedRpcPort, p2pPort] = await findFreePortsFn(2, MINER_PORT_RANGE);
+      const rpcPort = config.minerRpcPort ?? allocatedRpcPort;
       const peerActive = members.map((m) => ({
         ip: "127.0.0.1",
         port: m.p2pPort,
