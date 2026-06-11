@@ -516,6 +516,59 @@ describe("driver/runner: runDriver", () => {
     expect(result.report.metadata.rpcUrl).to.equal("http://127.0.0.1:30010");
   });
 
+  it("threads a build-resolved powpeg jar through to the RIT runner (sha mode, no --powpeg-jar)", async () => {
+    const fakeResolve = async (): Promise<ResolvedBinaries> => ({
+      rskjJarPath: "/cache/builds/rskj/abc/rskj-core-all.jar",
+      powpegJarPath: "/cache/builds/powpeg/def__rskj-abc/federate-node-all.jar",
+      provenance: {},
+      warnings: [],
+    });
+    const fakeTopology = async () => ({
+      bitcoind: {} as never,
+      federates: [] as never,
+      miner: null,
+      miningRpcUrl: "http://127.0.0.1:30010",
+      stop: async () => undefined,
+    });
+    const fakePassing = async (run: HardhatRun | K6Run) => ({
+      suite: suiteFromOutcome(run.name, "hardhat", true),
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    let ritPowpegJar = "";
+    const fakeRit = async (run: RitRun, opts: RitRunnerOptions): Promise<RitRunnerResult> => {
+      ritPowpegJar = opts.powpegJarPath;
+      return {
+        suite: { name: run.name, kind: "rit", verdict: computeSuiteVerdict([], 0), tests: [] },
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+      };
+    };
+    const { overrides } = makeWriters();
+
+    await runDriver(
+      // No powpegJarPath in config — it must come from the resolved build.
+      baseConfig({
+        preset: "full",
+        autoNode: true,
+        rpcUrl: "",
+        buildSpec: { mode: "sha", rskjRef: "abc", powpegRef: "def" },
+      }),
+      {
+        resolveBinariesFn: fakeResolve,
+        hardhat: fakePassing as never,
+        k6: fakePassing as never,
+        rit: fakeRit,
+        startTopologyFn: fakeTopology as never,
+        ...overrides,
+      },
+    );
+
+    expect(ritPowpegJar).to.equal("/cache/builds/powpeg/def__rskj-abc/federate-node-all.jar");
+  });
+
   it("a requiresTopology preset + --auto-node without a powpeg jar fails fast", async () => {
     const { overrides } = makeWriters();
     let err: Error | null = null;

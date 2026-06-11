@@ -199,6 +199,13 @@ export async function runDriver(
     }
   }
 
+  // Surface a build-resolved powpeg jar (sha / release / custom) to suites that
+  // consume it directly — the RIT runner launches federates from
+  // POWPEG_NODE_JAR_PATH. An explicit --powpeg-jar (config) still wins.
+  if (resolvedBinaries?.powpegJarPath && !effectiveConfig.powpegJarPath) {
+    effectiveConfig = { ...effectiveConfig, powpegJarPath: resolvedBinaries.powpegJarPath };
+  }
+
   log(
     `[driver] run-id=${effectiveConfig.runId} preset=${preset.name} rpc-url=${effectiveConfig.rpcUrl}`,
   );
