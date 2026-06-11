@@ -110,6 +110,9 @@ export interface RunnerOverrides {
  * @param overrides Test seams. Production callers omit this.
  * @returns         The aggregated report plus paths to the artifacts written.
  */
+/** Standard rskj regtest JSON-RPC port that node-facing suites hardcode. */
+const STANDARD_REGTEST_RPC_PORT = 4444;
+
 export async function runDriver(
   config: DriverConfig,
   overrides: RunnerOverrides = {},
@@ -181,6 +184,10 @@ export async function runDriver(
         powpegJarPath,
         rskjJarPath,
         minerAutomine: true,
+        // Node-facing suites (e.g. rskj-hardhat-tests) hardcode their network
+        // URL to the standard regtest RPC port; pin the miner there so they
+        // connect. k6 reads the URL from env, so it follows automatically.
+        minerRpcPort: STANDARD_REGTEST_RPC_PORT,
         log: (line: string) => log(`[topology] ${line}`),
       });
       log(`[driver] topology up; mining node at ${topologyHandle.miningRpcUrl}`);
@@ -224,6 +231,21 @@ export async function runDriver(
 
   try {
     for (const run of preset.runs) {
+      // RIT self-orchestrates its OWN genesis federation on the same fixed
+      // ports (30000–30005) our full topology holds, and it ignores our
+      // topology entirely. They can't coexist, so tear ours down before RIT
+      // runs — node-facing suites (hardhat/k6) come first and are already done.
+      if (run.kind === "rit" && topologyHandle) {
+        log(
+          "[driver] tearing down full topology before RIT (frees the federation ports RIT self-orchestrates on)",
+        );
+        try {
+          await topologyHandle.stop();
+        } catch (err) {
+          log(`[driver] pre-RIT topology teardown failed: ${(err as Error).message}`);
+        }
+        topologyHandle = null;
+      }
       log(`[driver] → ${run.kind} :: ${run.name}`);
       const suite = await runOne(run, effectiveConfig, { hardhatRunner, k6Runner, ritRunner, log });
       suites.push(suite);
