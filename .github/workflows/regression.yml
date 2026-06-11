@@ -46,10 +46,10 @@ jobs:
       EXPECTED_SUITES: "hardhat-smoke,k6:eth_blockNumber,rit-2wp-smoke"
     steps:
       - name: Checkout rskj-regression
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Node 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
           cache: "npm"
@@ -69,14 +69,44 @@ jobs:
           echo "BITCOIND_BIN_PATH=/tmp/bitcoin-0.18.1/bin/bitcoind" >> "$GITHUB_ENV"
           /tmp/bitcoin-0.18.1/bin/bitcoind -version | head -1
 
-      - name: Check out the sibling suite repos
+      # A GitHub Actions runner cannot ANONYMOUSLY clone rsksmart/rskj-hardhat-tests
+      # or rskj-k6-tests: both answer an unauthenticated request with HTTP 401
+      # (Basic realm="GitHub"), and the runner's built-in GITHUB_TOKEN is scoped to
+      # this repo only. Provide a SUITES_TOKEN secret (a token with read access to
+      # those two repos) to authenticate the clones. See docs/ci-regression-gate.md.
+      # (rootstock-integration-tests clones anonymously, HTTP 200 — no token.)
+      - name: Require SUITES_TOKEN
+        env:
+          SUITES_TOKEN: ${{ secrets.SUITES_TOKEN }}
+        run: |
+          if [ -z "${SUITES_TOKEN}" ]; then
+            echo "::error::SUITES_TOKEN secret is required: the runner cannot anonymously clone rsksmart/rskj-hardhat-tests + rskj-k6-tests (both return HTTP 401). See docs/ci-regression-gate.md."
+            exit 1
+          fi
+
+      - name: Check out rskj-hardhat-tests (needs SUITES_TOKEN)
+        uses: actions/checkout@v6
+        with:
+          repository: rsksmart/rskj-hardhat-tests
+          token: ${{ secrets.SUITES_TOKEN }}
+          path: _suites/rskj-hardhat-tests
+
+      - name: Check out rskj-k6-tests (needs SUITES_TOKEN)
+        uses: actions/checkout@v6
+        with:
+          repository: rsksmart/rskj-k6-tests
+          token: ${{ secrets.SUITES_TOKEN }}
+          path: _suites/rskj-k6-tests
+
+      - name: Check out rootstock-integration-tests (public)
+        uses: actions/checkout@v6
+        with:
+          repository: rsksmart/rootstock-integration-tests
+          path: _suites/rootstock-integration-tests
+
+      - name: Install k6 (for the k6 cherry-pick scenario)
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE/.."
-          git clone --depth 1 https://github.com/rsksmart/rskj-hardhat-tests.git
-          git clone --depth 1 https://github.com/rsksmart/rootstock-integration-tests.git
-          # k6 suite + the k6 binary are also required for the k6 cherry-pick.
-          git clone --depth 1 https://github.com/rsksmart/rskj-k6-tests.git
           curl -fsSL https://github.com/grafana/k6/releases/download/v0.50.0/k6-v0.50.0-linux-amd64.tar.gz \
             | tar -xz -C /tmp
           echo "/tmp/k6-v0.50.0-linux-amd64" >> "$GITHUB_PATH"
@@ -91,6 +121,7 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
+          mkdir -p "reports/$RUN_ID"
           node bin/rskj-regression.js run "${{ inputs.preset }}" \
             --auto-node \
             --build-mode sha \
@@ -98,9 +129,9 @@ jobs:
             --powpeg-sha "${{ inputs.powpeg_sha }}" \
             --run-id "$RUN_ID" \
             --output-dir "reports/$RUN_ID" \
-            --hardhat-tests-path "$GITHUB_WORKSPACE/../rskj-hardhat-tests" \
-            --k6-tests-path "$GITHUB_WORKSPACE/../rskj-k6-tests" \
-            --rit-tests-path "$GITHUB_WORKSPACE/../rootstock-integration-tests" \
+            --hardhat-tests-path "$GITHUB_WORKSPACE/_suites/rskj-hardhat-tests" \
+            --k6-tests-path "$GITHUB_WORKSPACE/_suites/rskj-k6-tests" \
+            --rit-tests-path "$GITHUB_WORKSPACE/_suites/rootstock-integration-tests" \
             2>&1 | tee "reports/$RUN_ID/driver.log"
           echo "driver_exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 

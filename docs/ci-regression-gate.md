@@ -18,6 +18,23 @@ The workflow is triggered manually (or via API) with two inputs:
 It runs build-from-SHA for both, brings up the full topology, runs
 `hardhat-smoke + k6 + RIT 2WP`, and gates.
 
+### Required secret: `SUITES_TOKEN`
+
+A GitHub Actions runner cannot **anonymously** clone the hardhat and k6 suite
+repos (`rsksmart/rskj-hardhat-tests`, `rsksmart/rskj-k6-tests`): both answer an
+unauthenticated request with **HTTP 401** (a `Basic realm="GitHub"` challenge),
+and the runner's built-in `GITHUB_TOKEN` is scoped to this repo only. Add a repo
+secret **`SUITES_TOKEN`** — a token with **read access to those two repos** —
+before dispatching; the workflow fails fast with a clear message if it is
+absent. `rsksmart/rootstock-integration-tests` clones anonymously (HTTP 200) and
+needs no token; `rsksmart/rskj` + `powpeg-node` (cloned by the build-from-SHA
+step, also anonymously) likewise.
+
+> The cause of the 401 was not pinned down (could be "internal" visibility, a
+> per-repo restriction, etc.) — but the fix only depends on the observed,
+> reproducible fact that an anonymous runner clone gets 401, which authenticating
+> resolves regardless of cause.
+
 **Why same-repo only** (scope decision, 2026-06-10): wiring a cross-repo
 trigger so a push to a `*-rc` branch on `rsksmart/rskj` or
 `rsksmart/powpeg-node` fires this workflow (via `repository_dispatch`), and
