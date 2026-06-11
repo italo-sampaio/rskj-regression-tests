@@ -128,12 +128,11 @@ jobs:
           npm ci
           bash configure.sh
 
-      - name: Install k6 (for the k6 cherry-pick scenario)
-        run: |
-          set -euo pipefail
-          curl -fsSL https://github.com/grafana/k6/releases/download/v0.50.0/k6-v0.50.0-linux-amd64.tar.gz \
-            | tar -xz -C /tmp
-          echo "/tmp/k6-v0.50.0-linux-amd64" >> "$GITHUB_PATH"
+      # Match the suite's own toolchain: rskj-k6-tests' CI installs k6 via this
+      # action (latest), and its scripts use syntax (optional chaining) that
+      # the old pinned v0.50.0 couldn't parse.
+      - name: Install k6
+        uses: grafana/setup-k6-action@v1
 
       - name: Install dependencies + build
         run: |
