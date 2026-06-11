@@ -147,7 +147,11 @@ export async function runRit(run: RitRun, options: RitRunnerOptions): Promise<Ri
   const reportAbs = isAbsolute(options.reportPath)
     ? options.reportPath
     : resolve(options.ritTestsPath, options.reportPath);
-  const bitcoindBinPath = options.bitcoindBinPath ?? DEFAULT_BITCOIND_BIN_PATH;
+  // Honor BITCOIND_BIN_PATH from the environment (CI sets it to the runner's
+  // bitcoind) before falling back to the local-workstation default — otherwise
+  // we'd overwrite the caller's env with a path that doesn't exist on CI.
+  const bitcoindBinPath =
+    options.bitcoindBinPath ?? process.env.BITCOIND_BIN_PATH ?? DEFAULT_BITCOIND_BIN_PATH;
   const bitcoinDataDir = options.bitcoinDataDir ?? resolve(options.ritTestsPath, "bitcoin-data");
 
   // GOTCHA: RIT's lib/bitcoin-runner.js uses removeDataDirOnStop and uses the
