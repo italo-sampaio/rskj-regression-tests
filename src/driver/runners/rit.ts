@@ -169,8 +169,18 @@ export async function runRit(run: RitRun, options: RitRunnerOptions): Promise<Ri
 
   // CRITICAL: keep mocha on its DEFAULT spec (no explicit file paths). Passing
   // spec paths would bypass test.js's cluster-bootstrap before-hook.
+  //
+  // --no-config / --no-package: RIT relies purely on mocha's defaults (it ships
+  // no .mocharc) to load its root `test.js`. But when RIT is checked out INSIDE
+  // another project (e.g. CI clones it to `_suites/…` under rskj-regression),
+  // mocha searches UPWARD and would inherit the parent's `.mocharc`/package
+  // `mocha` config (ours pins `spec: test/**/*.test.ts` + a tsx loader),
+  // breaking the run with "No test files found". Disabling both lookups pins
+  // RIT to its intended default behaviour regardless of where it's nested.
   const args = [
     "mocha",
+    "--no-config",
+    "--no-package",
     "--timeout",
     String(RIT_MOCHA_TIMEOUT_MS),
     "--reporter",

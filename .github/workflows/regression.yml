@@ -48,10 +48,13 @@ jobs:
       - name: Checkout rskj-regression
         uses: actions/checkout@v6
 
-      - name: Set up Node 22
+      # Node 24: rskj-regression needs >=22, and the hardhat suite pins
+      # engines.node >=24 (its pnpm-locked toolchain). One runtime for the
+      # driver + every suite child keeps things consistent.
+      - name: Set up Node 24
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
 
       - name: Set up JDK 17
@@ -104,16 +107,21 @@ jobs:
           repository: rsksmart/rootstock-integration-tests
           path: _suites/rootstock-integration-tests
 
-      # The driver shells `npx hardhat`/`npx mocha` inside the suite checkouts;
-      # they must carry their own node_modules first, or npx silently pulls a
-      # wrong-major package off the registry (hardhat@3 was auto-installed and
-      # broke). hardhat-tests has no lockfile + a `prepare` (hardhat compile),
-      # so `npm install`; RIT has a lockfile, so `npm ci`, then its configure.sh
-      # (chmod 400 on the federation keyfiles the federate JVMs load).
-      - name: Install hardhat suite deps
+      # The driver shells `npx hardhat`/`npx mocha` inside the suite checkouts,
+      # so each must carry its own node_modules first — installed with the
+      # SUITE'S OWN toolchain, not just `npm install`. rskj-hardhat-tests is a
+      # pnpm project (packageManager: pnpm, pnpm-lock.yaml); installing it with
+      # npm resolves mismatched ethers/typechain versions and its generated
+      # types fail to load (missing `Emitter` export). Use corepack's pnpm with
+      # the lockfile. (`prepare` runs `hardhat compile` to generate typechain.)
+      - name: Install hardhat suite deps (pnpm)
         working-directory: _suites/rskj-hardhat-tests
-        run: npm install
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
 
+      # RIT has an npm lockfile; install + run its configure.sh (chmod 400 on
+      # the federation keyfiles the federate JVMs load).
       - name: Install RIT suite deps + configure
         working-directory: _suites/rootstock-integration-tests
         run: |

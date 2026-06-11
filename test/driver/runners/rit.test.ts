@@ -111,6 +111,11 @@ describe("driver/runners: runRit", () => {
     // CRITICAL: no explicit spec file path on the CLI — that would bypass
     // test.js's cluster-bootstrap before-hook.
     expect(inv.args).to.not.include.members(["tests/00_00_01-sync.js"]);
+    // Disable mocha config/package lookup so a parent project's .mocharc
+    // (e.g. when RIT is nested under rskj-regression's _suites/) can't bleed
+    // its spec/loader into RIT's run.
+    expect(inv.args).to.include("--no-config");
+    expect(inv.args).to.include("--no-package");
     expect(inv.args).to.include("--reporter");
     expect(inv.args[inv.args.indexOf("--reporter") + 1]).to.equal("mocha-junit-reporter");
     expect(inv.args).to.include("--timeout");
