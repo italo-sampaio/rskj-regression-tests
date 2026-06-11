@@ -381,7 +381,11 @@ describe("build/sha-mode: resolveSha", () => {
       "https://github.com/rsksmart/powpeg-node.git",
     ]);
     expect(result.rskjJarPath).to.equal(`${RSKJ_ENTRY}/${RSKJ_JAR}`);
-    expect(result.powpegJarPath).to.equal(`${CACHE}/builds/powpeg/${POWPEG_SHA}/${POWPEG_JAR}`);
+    // The powpeg jar embeds rskj-core from the rskj SHA, so its cache entry is
+    // keyed by both SHAs.
+    expect(result.powpegJarPath).to.equal(
+      `${CACHE}/builds/powpeg/${POWPEG_SHA}__rskj-${RSKJ_SHA}/${POWPEG_JAR}`,
+    );
     expect(result.provenance.powpeg).to.deep.include({
       component: "powpeg",
       mode: "sha",
@@ -389,6 +393,46 @@ describe("build/sha-mode: resolveSha", () => {
       version: "TEST-9.9.9.9",
       cacheHit: false,
     });
+  });
+
+  it("wires powpeg to composite-build rskj-core from the requested rskj source", async () => {
+    const fs = new FakeFs();
+    const { spawnFn, calls } = scriptedSpawn(happyScript(fs));
+
+    await resolveSha(
+      { mode: "sha", rskjRef: RSKJ_SHA, powpegRef: POWPEG_SHA, cacheDir: CACHE },
+      fs.seams({ spawnFn }),
+    );
+
+    // A DONT-COMMIT-settings.gradle is written into the powpeg build tree (its
+    // settings.gradle applies it) pointing includeBuild at a throwaway rskj
+    // source worktree, with the SNAPSHOT/RC rskj-core substitution.
+    const powpegTree = `${CACHE}/builds/powpeg/${POWPEG_SHA}.tree.4242`;
+    const rskjCompositeSrc = `${CACHE}/builds/rskj/${RSKJ_SHA}.composite.4242`;
+    const settings = fs.files.get(`${powpegTree}/DONT-COMMIT-settings.gradle`);
+    expect(settings, "DONT-COMMIT-settings.gradle should be written").to.be.a("string");
+    expect(settings).to.include(`includeBuild('${rskjCompositeSrc}')`);
+    expect(settings).to.include("dependency.requested.module == 'rskj-core'");
+    expect(settings).to.include("dependency.useTarget targetProject");
+
+    // The composite source is a worktree of the rskj bare repo (no second
+    // clone), configured, then removed.
+    const compositeAdd = calls.find(
+      (c) => c.cmd === "git" && c.args.includes("worktree") && c.args.includes(rskjCompositeSrc),
+    );
+    expect(compositeAdd, "rskj composite worktree add").to.not.equal(undefined);
+    expect(compositeAdd!.args).to.include("--detach");
+    expect(compositeAdd!.args[compositeAdd!.args.length - 1]).to.equal(RSKJ_SHA);
+    expect(
+      calls.some((c) => c.cmd === "./configure.sh" && c.cwd === rskjCompositeSrc),
+      "configure.sh runs in the composite source",
+    ).to.equal(true);
+    expect(
+      calls.some(
+        (c) => c.cmd === "git" && c.args.includes("worktree") && c.args.includes("remove"),
+      ),
+      "composite worktree is cleaned up",
+    ).to.equal(true);
   });
 
   it("removes a stale lock left by a dead pid and proceeds to build", async () => {

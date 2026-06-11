@@ -120,8 +120,13 @@ jobs:
         id: run
         continue-on-error: true
         run: |
-          set -o pipefail
           mkdir -p "reports/$RUN_ID"
+          # The step runs under `bash -e`: a failing driver makes the pipe
+          # return non-zero, which would abort the script BEFORE we capture the
+          # exit code (leaving driver_exit empty and the gate blind to it). Run
+          # the pipeline with -e off and capture the driver's real exit from
+          # PIPESTATUS[0] (node's, not tee's), then hand it to the gate.
+          set +e
           node bin/rskj-regression.js run "${{ inputs.preset }}" \
             --auto-node \
             --build-mode sha \
@@ -133,7 +138,10 @@ jobs:
             --k6-tests-path "$GITHUB_WORKSPACE/_suites/rskj-k6-tests" \
             --rit-tests-path "$GITHUB_WORKSPACE/_suites/rootstock-integration-tests" \
             2>&1 | tee "reports/$RUN_ID/driver.log"
-          echo "driver_exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          driver_exit=${PIPESTATUS[0]}
+          set -e
+          echo "driver_exit=$driver_exit" >> "$GITHUB_OUTPUT"
+          echo "driver exited with code $driver_exit"
 
       - name: Gate on the machine-readable verdict
         id: gate

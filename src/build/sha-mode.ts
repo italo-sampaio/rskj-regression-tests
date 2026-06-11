@@ -9,7 +9,10 @@
  * `~/workspace/powpeg-node`): besides trampling uncommitted state, the
  * powpeg checkout carries a live `DONT-COMMIT-settings.gradle` that
  * silently substitutes the local rskj tree for SNAPSHOT/RC rskj-core
- * versions — a clean clone is the only hermetic option.
+ * versions — a clean clone is the only hermetic option. (We write our OWN
+ * such file into the throwaway powpeg clone — see below — pointed at a
+ * clean rskj clone, so the substitution is deterministic, not whatever
+ * happens to sit in the developer's tree.)
  *
  * Ref normalization: every ref (branch, tag, short SHA, full SHA) is
  * collapsed via `git rev-parse <ref>^{commit}` to the 40-char commit
@@ -25,6 +28,16 @@
  *                                    # from deps.rsklabs.io (fresh clones
  *                                    # don't carry it)
  *     ./gradlew --no-daemon fatJar
+ *
+ * powpeg additionally needs `co.rsk:rskj-core`, which it cannot fetch from a
+ * remote on CI (deps.rsklabs.io 403s anonymous SNAPSHOT/RC metadata). So when
+ * an rskj ref is also requested, we check that rskj source out in its own
+ * worktree and write a `DONT-COMMIT-settings.gradle` into the powpeg clone
+ * that `includeBuild`s it and substitutes the SNAPSHOT/RC `rskj-core` request
+ * with rskj's `:rskj-core` project — exactly how rootstock-integration-tests'
+ * `configure_gradle_powpeg.sh` wires it. The powpeg jar therefore embeds
+ * rskj-core from that rskj SHA, so the powpeg cache entry is keyed by BOTH
+ * SHAs (`<powpegSha>__rskj-<rskjSha>`).
  *
  * Outputs land in `rskj-core/build/libs/rskj-core-<version>-all.jar`
  * (rskj) / `build/libs/federate-node-<modifier>-<version>-all.jar`
@@ -80,7 +93,14 @@ export async function resolveSha(
     result.provenance.rskj = rskj;
   }
   if (spec.powpegRef) {
-    const powpeg = await resolveOneSha("powpeg", spec.powpegRef, cacheDir, s);
+    // powpeg's fatJar needs co.rsk:rskj-core, which it cannot fetch from a
+    // remote on CI (deps.rsklabs.io 403s anonymous SNAPSHOT metadata). When an
+    // rskj ref is also being built, wire powpeg to build rskj-core from that
+    // exact source as a Gradle composite build — the same DONT-COMMIT-
+    // settings.gradle substitution rootstock-integration-tests uses. This also
+    // keys the powpeg cache entry by the rskj SHA (the jar embeds rskj-core).
+    const compositeRskjSha = result.provenance.rskj?.commitSha;
+    const powpeg = await resolveOneSha("powpeg", spec.powpegRef, cacheDir, s, compositeRskjSha);
     result.powpegJarPath = powpeg.path;
     result.provenance.powpeg = powpeg;
   }
@@ -96,12 +116,19 @@ async function resolveOneSha(
   ref: string,
   cacheDir: string,
   s: MaterializedSeams,
+  compositeRskjSha?: string,
 ): Promise<BinaryProvenance> {
   const buildsDir = join(cacheDir, "builds", component);
+  // A composite-built powpeg jar embeds rskj-core from a specific rskj SHA, so
+  // that SHA is part of the cache identity (two rskj SHAs → two powpeg jars for
+  // the same powpeg SHA). Non-composite builds key on the component SHA alone.
+  const keyOf = (sha: string): string =>
+    compositeRskjSha ? `${sha}__rskj-${compositeRskjSha}` : sha;
 
-  // Fast path: a full SHA with a valid cache entry never touches git
-  // (or the network) at all.
-  if (FULL_SHA.test(ref)) {
+  // Fast path: a full SHA with a valid cache entry never touches git (or the
+  // network) at all. Skipped for composite powpeg builds — the entry key isn't
+  // the ref alone, so we must resolve the rskj-keyed path below.
+  if (FULL_SHA.test(ref) && !compositeRskjSha) {
     const hit = await validateCacheEntry(join(buildsDir, ref), null, s);
     if (hit.valid) {
       s.log(`[build:sha] ${component} ${ref}: cache hit (no git needed) at ${hit.jarPath}`);
@@ -112,7 +139,7 @@ async function resolveOneSha(
   const srcDir = join(cacheDir, "src", `${component}.git`);
   await ensureBareRepo(component, srcDir, cacheDir, s);
   const sha = await resolveCommit(srcDir, ref, s);
-  const entryDir = join(buildsDir, sha);
+  const entryDir = join(buildsDir, keyOf(sha));
 
   const cached = await validateCacheEntry(entryDir, null, s);
   if (cached.valid) {
@@ -131,7 +158,7 @@ async function resolveOneSha(
   // Cache miss — serialize concurrent builders on a per-SHA lock, and
   // re-check after acquiring it (another builder may have just finished).
   s.mkdirFn(buildsDir);
-  const lockPath = join(buildsDir, `${sha}.lock`);
+  const lockPath = join(buildsDir, `${keyOf(sha)}.lock`);
   await acquireLock(lockPath, s);
   try {
     const lateHit = await validateCacheEntry(entryDir, null, s);
@@ -147,7 +174,17 @@ async function resolveOneSha(
         true,
       );
     }
-    return await buildAndCache(component, ref, sha, srcDir, buildsDir, entryDir, s);
+    return await buildAndCache(
+      component,
+      ref,
+      sha,
+      srcDir,
+      buildsDir,
+      entryDir,
+      cacheDir,
+      s,
+      compositeRskjSha,
+    );
   } finally {
     try {
       s.rmFn(lockPath);
@@ -164,14 +201,35 @@ async function buildAndCache(
   srcDir: string,
   buildsDir: string,
   entryDir: string,
+  cacheDir: string,
   s: MaterializedSeams,
+  compositeRskjSha?: string,
 ): Promise<BinaryProvenance> {
   const treeDir = join(buildsDir, `${sha}.tree.${s.pid}`);
   const startedAt = new Date().toISOString();
   s.log(`[build:sha] ${component} ${sha}: building in throwaway worktree ${treeDir}`);
   await git(srcDir, ["worktree", "add", "--detach", treeDir, sha], s);
+  let cleanupComposite: (() => Promise<void>) | null = null;
   try {
     await run("./configure.sh", [], treeDir, s, `${component} configure.sh`);
+
+    // powpeg resolves co.rsk:rskj-core from a composite build of the requested
+    // rskj source (mirrors RIT's configure_gradle_powpeg.sh), so it never hits
+    // a remote repo for the SNAPSHOT/RC. Written before `gradlew` so powpeg's
+    // settings.gradle picks it up.
+    if (component === "powpeg" && compositeRskjSha) {
+      const composite = await setupCompositeRskjSource(compositeRskjSha, cacheDir, s);
+      cleanupComposite = composite.cleanup;
+      s.writeFileFn(
+        join(treeDir, "DONT-COMMIT-settings.gradle"),
+        renderCompositeSettings(composite.srcDir),
+      );
+      s.log(
+        `[build:sha] powpeg ${sha}: composite-building rskj-core from rskj ` +
+          `${compositeRskjSha} at ${composite.srcDir}`,
+      );
+    }
+
     await run("./gradlew", ["--no-daemon", "fatJar"], treeDir, s, `${component} gradlew fatJar`);
 
     const libsDir = join(treeDir, LIBS_DIR[component]);
@@ -201,6 +259,7 @@ async function buildAndCache(
             jarName,
             sha256,
             task: "fatJar",
+            rskjCoreSource: compositeRskjSha ?? null,
             jdk: await detectJdk(s),
             startedAt,
             finishedAt: new Date().toISOString(),
@@ -222,8 +281,71 @@ async function buildAndCache(
       throw err;
     }
   } finally {
+    if (cleanupComposite) {
+      try {
+        await cleanupComposite();
+      } catch {
+        /* ignore */
+      }
+    }
     await removeWorktree(srcDir, treeDir, s);
   }
+}
+
+/* -------------------------------------------------------------------------- *
+ * Composite build wiring — powpeg builds rskj-core from a requested rskj
+ * source instead of resolving the published artifact from a remote repo.
+ * Mirrors rootstock-integration-tests' configure_gradle_powpeg.sh.
+ * -------------------------------------------------------------------------- */
+
+/**
+ * Check out the rskj source at `rskjSha` in a throwaway worktree (with
+ * `./configure.sh` run, matching RIT) for powpeg to `includeBuild`. Returns
+ * the absolute source dir and a cleanup that removes the worktree.
+ */
+async function setupCompositeRskjSource(
+  rskjSha: string,
+  cacheDir: string,
+  s: MaterializedSeams,
+): Promise<{ srcDir: string; cleanup: () => Promise<void> }> {
+  const rskjBare = join(cacheDir, "src", "rskj.git");
+  await ensureBareRepo("rskj", rskjBare, cacheDir, s);
+  const treeDir = join(cacheDir, "builds", "rskj", `${rskjSha}.composite.${s.pid}`);
+  await git(rskjBare, ["worktree", "add", "--detach", treeDir, rskjSha], s);
+  await run("./configure.sh", [], treeDir, s, "rskj configure.sh (composite source)");
+  return {
+    srcDir: treeDir,
+    cleanup: () => removeWorktree(rskjBare, treeDir, s),
+  };
+}
+
+/**
+ * powpeg's `settings.gradle` applies a sibling `DONT-COMMIT-settings.gradle`
+ * if present. This one composites in the local rskj build and substitutes any
+ * SNAPSHOT/RC `co.rsk:rskj-core` request with its `:rskj-core` project — the
+ * exact rule rootstock-integration-tests uses.
+ */
+function renderCompositeSettings(rskjSrcDir: string): string {
+  return `// Generated by rskj-regression sha-mode — mirrors RIT configure_gradle_powpeg.sh.
+// Build rskj-core from the requested rskj source as a composite build so powpeg
+// never resolves it from a remote repo (deps.rsklabs.io 403s anonymously).
+includeBuild('${rskjSrcDir}') {
+   dependencySubstitution {
+        all { DependencySubstitution dependency ->
+           if (dependency.requested instanceof ModuleComponentSelector
+                  && dependency.requested.group == 'co.rsk'
+                  && dependency.requested.module == 'rskj-core'
+                  && (dependency.requested.version.endsWith('SNAPSHOT') || dependency.requested.version.endsWith('RC'))) {
+              def targetProject = project(":\${dependency.requested.module}")
+              if (targetProject != null) {
+                 println('---- USING LOCAL ' + dependency.requested.displayName + ' PROJECT ----')
+                 dependency.useTarget targetProject
+              }
+           }
+        }
+   }
+}
+`;
 }
 
 function provenanceFor(
