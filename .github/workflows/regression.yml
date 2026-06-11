@@ -104,6 +104,22 @@ jobs:
           repository: rsksmart/rootstock-integration-tests
           path: _suites/rootstock-integration-tests
 
+      # The driver shells `npx hardhat`/`npx mocha` inside the suite checkouts;
+      # they must carry their own node_modules first, or npx silently pulls a
+      # wrong-major package off the registry (hardhat@3 was auto-installed and
+      # broke). hardhat-tests has no lockfile + a `prepare` (hardhat compile),
+      # so `npm install`; RIT has a lockfile, so `npm ci`, then its configure.sh
+      # (chmod 400 on the federation keyfiles the federate JVMs load).
+      - name: Install hardhat suite deps
+        working-directory: _suites/rskj-hardhat-tests
+        run: npm install
+
+      - name: Install RIT suite deps + configure
+        working-directory: _suites/rootstock-integration-tests
+        run: |
+          npm ci
+          bash configure.sh
+
       - name: Install k6 (for the k6 cherry-pick scenario)
         run: |
           set -euo pipefail
